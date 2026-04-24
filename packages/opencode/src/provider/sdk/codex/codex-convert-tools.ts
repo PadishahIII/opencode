@@ -4,22 +4,6 @@ import type { CodexTool } from "./codex-api-types"
 const APPLY_PATCH_DESCRIPTION =
   "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON."
 
-const CODEX_FUNCTION_TOOL_ALLOWLIST = new Set([
-  "bash",
-  "read",
-  "glob",
-  "grep",
-  "edit",
-  "write",
-  "task",
-  "webfetch",
-  "todowrite",
-  "websearch",
-  "codesearch",
-  "skill",
-  "question",
-])
-
 const APPLY_PATCH_LARK_GRAMMAR = `start: begin_patch hunk+ end_patch
 begin_patch: "*** Begin Patch" LF
 end_patch: "*** End Patch" LF?
@@ -76,10 +60,6 @@ export function convertCodexTools(options: Pick<LanguageModelV3CallOptions, "too
       continue
     }
     if (item.type === "function") {
-      if (!CODEX_FUNCTION_TOOL_ALLOWLIST.has(item.name)) {
-        warnings.push({ type: "unsupported", feature: `codex provider external function tool ${item.name}` })
-        continue
-      }
       tools.push({
         type: "function",
         name: item.name,

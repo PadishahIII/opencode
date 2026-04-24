@@ -220,7 +220,7 @@ describe("codex sdk", () => {
     )
   })
 
-  test("filters external function tools for codex", async () => {
+  test("declares external function tools for codex", async () => {
     let request: { body: any } | undefined
     const provider = createCodexProvider({
       apiKey: "test-codex-key",
@@ -246,6 +246,14 @@ describe("codex sdk", () => {
       },
     }).consumeStream()
 
-    expect(request?.body.tools).toEqual([])
+    expect(request?.body.tools).toContainEqual(
+      expect.objectContaining({
+        type: "function",
+        name: "external-mcp_tool",
+        description: "external MCP tool",
+        strict: false,
+        parameters: expect.objectContaining({ type: "object" }),
+      }),
+    )
   })
 })
