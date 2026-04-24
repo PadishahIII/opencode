@@ -40,6 +40,7 @@ type Sse = {
   hang?: boolean
   error?: unknown
   reset?: boolean
+  rawResponses?: boolean
 }
 
 type HttpError = {
@@ -276,6 +277,52 @@ function responseToolDone(tool: { id: string; item: string; name: string; args: 
       name: tool.name,
       arguments: tool.args,
       status: "completed",
+    },
+  }
+}
+
+function responseApplyPatchAdded(
+  input: {
+    callId: string
+    itemId: string
+    operation: { type: "create_file" | "update_file" | "delete_file"; path: string; diff?: string }
+    status?: "in_progress" | "completed"
+  },
+  seq: number,
+) {
+  return {
+    type: "response.output_item.added",
+    sequence_number: seq,
+    output_index: 0,
+    item: {
+      type: "apply_patch_call",
+      id: input.itemId,
+      call_id: input.callId,
+      operation: input.operation,
+      status: input.status ?? "in_progress",
+    },
+  }
+}
+
+function responseApplyPatchDone(
+  input: {
+    callId: string
+    itemId: string
+    operation: { type: "create_file" | "update_file" | "delete_file"; path: string; diff?: string }
+    status?: "completed" | "failed"
+  },
+  seq: number,
+) {
+  return {
+    type: "response.output_item.done",
+    sequence_number: seq,
+    output_index: 0,
+    item: {
+      type: "apply_patch_call",
+      id: input.itemId,
+      call_id: input.callId,
+      operation: input.operation,
+      status: input.status ?? "completed",
     },
   }
 }
@@ -573,6 +620,7 @@ export function raw(input: {
   hang?: boolean
   error?: unknown
   reset?: boolean
+  rawResponses?: boolean
 }): Item {
   return {
     type: "sse",
@@ -582,7 +630,41 @@ export function raw(input: {
     hang: input.hang,
     error: input.error,
     reset: input.reset,
+    rawResponses: input.rawResponses,
   }
+}
+
+export function responsesApplyPatchCall(input: {
+  model?: string
+  callId: string
+  itemId: string
+  path: string
+  diff: string
+  finalText?: string
+}): Item {
+  const model = input.model ?? "gpt-5.4"
+  const operation = {
+    type: "create_file" as const,
+    path: input.path,
+    diff: input.diff,
+  }
+  let seq = 1
+  const head: unknown[] = [responseCreated(model)]
+  seq += 1
+  head.push(responseApplyPatchAdded({ callId: input.callId, itemId: input.itemId, operation }, seq))
+  seq += 1
+  head.push(responseApplyPatchDone({ callId: input.callId, itemId: input.itemId, operation }, seq))
+  if (input.finalText) {
+    const msg = "msg_apply_patch"
+    seq += 1
+    head.push(responseMessage(msg, seq))
+    seq += 1
+    head.push(responseText(msg, input.finalText, seq))
+    seq += 1
+    head.push(responseMessageDone(msg, seq))
+  }
+  head.push(responseCompleted({ seq: seq + 1 }))
+  return raw({ head, rawResponses: true })
 }
 
 function item(input: Item | Reply) {
@@ -683,7 +765,10 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
         hits = [...hits, current]
         yield* notify()
         if (next.type !== "sse") return fail(next)
-        if (mode === "responses") return send(responses(next, modelFrom(body)))
+        if (mode === "responses") {
+          if (next.rawResponses) return send(next)
+          return send(responses(next, modelFrom(body)))
+        }
         if (next.reset) {
           yield* reset(next)
           return HttpServerResponse.empty()

@@ -46,6 +46,50 @@ You can customize the base URL for any provider by setting the `baseURL` option.
 }
 ```
 
+#### Transport
+
+Some providers and gateways support more than one API surface. You can make the
+selection explicit with `transport`.
+
+- `sdk` - use the provider SDK default
+- `responses` - force the OpenAI Responses API path
+- `chat` - force the chat-completions path
+
+This is useful for gateways that speak the OpenAI Responses API but are not the
+built-in `openai` provider.
+
+#### Codex provider example
+
+Use a `codex` provider when your gateway is OpenAI Responses-compatible and you
+want a separate provider identity from `openai`.
+
+You can configure this interactively with:
+
+```txt
+opencode auth login
+```
+
+Then select `Codex`, enter the API key, and provide the gateway base URL when
+prompted. OpenCode will store the credential in `auth.json` and write the
+global `provider.codex` config for you.
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "codex": {
+      "name": "Codex",
+      "env": ["CODEX_API_KEY"],
+      "npm": "@opencode-ai/codex",
+      "transport": "responses",
+      "options": {
+        "baseURL": "https://your-codex-gateway.example/v1"
+      }
+    }
+  }
+}
+```
+
 ---
 
 ## OpenCode Zen

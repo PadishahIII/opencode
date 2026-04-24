@@ -20,6 +20,7 @@ import { zod, ZodOverride } from "@/util/effect-zod"
 import { NonNegativeInt, withStatics } from "@/util/schema"
 import { namedSchemaError } from "@/util/named-schema-error"
 import { EffectLogger } from "@/effect"
+import { codexToolToModelOutput } from "./codex-tools"
 
 /** Error shape thrown by Bun's fetch() when gzip/br decompression fails mid-stream */
 interface FetchDecompressionError extends Error {
@@ -953,7 +954,25 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
     }
   }
 
-  const tools = Object.fromEntries(Array.from(toolNames).map((toolName) => [toolName, { toModelOutput }]))
+  const tools = Object.fromEntries(
+    Array.from(toolNames).map((toolName) => [
+      toolName,
+      {
+        toModelOutput(options: { toolCallId: string; input: unknown; output: unknown }) {
+          if (model.providerID === ProviderID.codex) {
+            const serialized = codexToolToModelOutput({
+              toolName,
+              toolCallId: options.toolCallId,
+              input: options.input,
+              output: options.output,
+            })
+            if (serialized) return serialized
+          }
+          return toModelOutput(options)
+        },
+      },
+    ]),
+  )
 
   return yield* Effect.promise(() =>
     convertToModelMessages(

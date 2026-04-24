@@ -45,6 +45,15 @@ function sdkKey(npm: string): string | undefined {
   return undefined
 }
 
+function isOpenAIResponsesStyleProvider(model: Provider.Model) {
+  return (
+    model.providerID === "openai" ||
+    model.providerID === "codex" ||
+    model.api.npm === "@ai-sdk/openai" ||
+    model.api.npm === "@ai-sdk/github-copilot"
+  )
+}
+
 function normalizeMessages(
   msgs: ModelMessage[],
   model: Provider.Model,
@@ -803,11 +812,7 @@ export function options(input: {
   const result: Record<string, any> = {}
 
   // openai and providers using openai package should set store to false by default.
-  if (
-    input.model.providerID === "openai" ||
-    input.model.api.npm === "@ai-sdk/openai" ||
-    input.model.api.npm === "@ai-sdk/github-copilot"
-  ) {
+  if (isOpenAIResponsesStyleProvider(input.model)) {
     result["store"] = false
   }
 
@@ -842,7 +847,7 @@ export function options(input: {
     }
   }
 
-  if (input.model.providerID === "openai" || input.providerOptions?.setCacheKey) {
+  if (isOpenAIResponsesStyleProvider(input.model) || input.providerOptions?.setCacheKey) {
     result["promptCacheKey"] = input.sessionID
   }
 
@@ -916,6 +921,12 @@ export function options(input: {
     }
   }
 
+  if (input.model.providerID === "codex") {
+    delete result["include"]
+    delete result["promptCacheKey"]
+    delete result["reasoningSummary"]
+  }
+
   if (input.model.providerID === "venice") {
     result["promptCacheKey"] = input.sessionID
   }
@@ -933,11 +944,7 @@ export function options(input: {
 }
 
 export function smallOptions(model: Provider.Model) {
-  if (
-    model.providerID === "openai" ||
-    model.api.npm === "@ai-sdk/openai" ||
-    model.api.npm === "@ai-sdk/github-copilot"
-  ) {
+  if (isOpenAIResponsesStyleProvider(model)) {
     if (model.api.id.includes("gpt-5")) {
       if (model.api.id.includes("5.") || model.api.id.includes("5-mini")) {
         return { store: false, reasoningEffort: "low" }

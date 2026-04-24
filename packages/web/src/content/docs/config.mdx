@@ -366,6 +366,13 @@ Provider options can include `timeout`, `chunkTimeout`, and `setCacheKey`:
 - `chunkTimeout` - Timeout in milliseconds between streamed response chunks. If no chunk arrives in time, the request is aborted.
 - `setCacheKey` - Ensure a cache key is always set for designated provider.
 
+You can also set `transport` at the provider level to control which API surface
+OpenCode should use when the underlying SDK supports multiple transports:
+
+- `sdk` - Use the provider SDK default.
+- `responses` - Force the OpenAI Responses API path.
+- `chat` - Force the chat-completions path.
+
 You can also configure [local models](/docs/models#local). [Learn more](/docs/models).
 
 ---

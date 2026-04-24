@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 import path from "path"
 import { tool, type ModelMessage } from "ai"
+import { openai } from "@ai-sdk/openai"
 import { Cause, Effect, Exit, Stream } from "effect"
 import z from "zod"
 import { makeRuntime } from "../../src/effect/run-service"
@@ -16,6 +17,7 @@ import type { Agent } from "../../src/agent/agent"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { AppRuntime } from "../../src/effect/app-runtime"
+import { SystemPrompt } from "../../src/session/system"
 
 async function getModel(providerID: ProviderID, modelID: ModelID) {
   return AppRuntime.runPromise(
@@ -116,6 +118,146 @@ describe("session.llm.hasToolCalls", () => {
       },
     ] as ModelMessage[]
     expect(LLM.hasToolCalls(messages)).toBe(true)
+  })
+})
+
+describe("session.llm.systemPrompt", () => {
+  test('routes codex provider to codex prompt', () => {
+    const model = {
+      providerID: ProviderID.codex,
+      api: {
+        id: "gpt-5.4",
+        npm: "@ai-sdk/openai",
+      },
+    } as Provider.Model
+
+    expect(SystemPrompt.provider(model).join("\n")).toContain("You are OpenCode, the best coding agent on the planet.")
+  })
+})
+
+describe("session.llm.codex responses tools", () => {
+  test("keeps codex provider tools enabled on responses requests", async () => {
+    const server = state.server
+    if (!server) {
+      throw new Error("Server not initialized")
+    }
+
+    const source = await loadFixture("openai", "gpt-5.2")
+    const model = source.model
+    const responseChunks = [
+      {
+        type: "response.created",
+        response: {
+          id: "resp-codex-tools",
+          created_at: Math.floor(Date.now() / 1000),
+          model: model.id,
+          service_tier: null,
+        },
+      },
+      {
+        type: "response.output_text.delta",
+        item_id: "item-codex-tools",
+        delta: "Hello",
+        logprobs: null,
+      },
+      {
+        type: "response.completed",
+        response: {
+          incomplete_details: null,
+          usage: {
+            input_tokens: 1,
+            input_tokens_details: null,
+            output_tokens: 1,
+            output_tokens_details: null,
+          },
+          service_tier: null,
+        },
+      },
+    ]
+    const request = waitRequest("/responses", createEventResponse(responseChunks, true))
+
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            enabled_providers: ["codex"],
+            provider: {
+              codex: {
+                name: "Codex",
+                npm: "@ai-sdk/openai",
+                transport: "responses",
+                models: {
+                  [model.id]: model,
+                },
+                options: {
+                  apiKey: "test-codex-key",
+                  baseURL: `${server.url.origin}/v1`,
+                },
+              },
+            },
+          }),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const resolved = await getModel(ProviderID.codex, ModelID.make(model.id))
+        const sessionID = SessionID.make("session-test-codex-tools")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+
+        const user = {
+          id: MessageID.make("user-codex-tools"),
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID: ProviderID.codex, modelID: resolved.id, variant: "high" },
+        } satisfies MessageV2.User
+
+        await drain({
+          user,
+          sessionID,
+          model: resolved,
+          agent,
+          system: ["You are a helpful assistant."],
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {
+            apply_patch: openai.tools.applyPatch({}),
+          },
+        })
+
+        const capture = await request
+        const body = capture.body as {
+          instructions?: string
+          include?: string[]
+          prompt_cache_key?: string
+          reasoning?: { summary?: string }
+          text?: { verbosity?: string }
+          tools?: Array<Record<string, unknown>>
+        }
+
+        expect(capture.url.pathname.endsWith("/responses")).toBe(true)
+        expect(typeof body.instructions).toBe("string")
+        expect(body.reasoning?.summary).toBeUndefined()
+        expect(Array.isArray(body.tools)).toBe(true)
+        expect(body.tools?.length).toBeGreaterThan(0)
+        expect(
+          body.tools?.some(
+            (item) =>
+              (item.type === "custom" && item.name === "apply_patch") || item.type === "apply_patch",
+          ),
+        ).toBe(true)
+      },
+    })
   })
 })
 

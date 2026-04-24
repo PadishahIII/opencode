@@ -70,6 +70,7 @@ export const Model = Schema.Struct({
 
 export const Info = Schema.Struct({
   api: Schema.optional(Schema.String),
+  transport: Schema.optional(Schema.Literals(["sdk", "responses", "chat"])),
   name: Schema.optional(Schema.String),
   env: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
   id: Schema.optional(Schema.String),

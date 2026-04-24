@@ -95,6 +95,7 @@ const live: Layer.Layer<
 
       // TODO: move this to a proper hook
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
+      const usesTopLevelInstructions = isOpenaiOauth || input.model.providerID === "codex"
 
       const system: string[] = []
       system.push(
@@ -140,12 +141,18 @@ const live: Layer.Layer<
         mergeDeep(input.agent.options),
         mergeDeep(variant),
       )
-      if (isOpenaiOauth) {
+      if (input.model.providerID === "codex") {
+        delete options.include
+        delete options.promptCacheKey
+        delete options.reasoningSummary
+        delete options.textVerbosity
+      }
+      if (usesTopLevelInstructions) {
         options.instructions = system.join("\n")
       }
 
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
-      const messages = isOpenaiOauth
+      const messages = usesTopLevelInstructions
         ? input.messages
         : isWorkflow
           ? input.messages
@@ -194,6 +201,7 @@ const live: Layer.Layer<
       )
 
       const tools = resolveTools(input)
+      const effectiveTools = tools
 
       // LiteLLM and some Anthropic proxies require the tools parameter to be present
       // when message history contains tool calls, even if no tools are being used.
@@ -212,10 +220,10 @@ const live: Layer.Layer<
       // The stub description explicitly tells the model not to call it.
       if (
         (isLiteLLMProxy || input.model.providerID.includes("github-copilot")) &&
-        Object.keys(tools).length === 0 &&
+        Object.keys(effectiveTools).length === 0 &&
         hasToolCalls(input.messages)
       ) {
-        tools["_noop"] = tool({
+        effectiveTools["_noop"] = tool({
           description: "Do not call this tool. It exists only for API compatibility and must never be invoked.",
           inputSchema: jsonSchema({
             type: "object",
@@ -239,7 +247,7 @@ const live: Layer.Layer<
         workflowModel.sessionID = input.sessionID
         workflowModel.systemPrompt = system.join("\n")
         workflowModel.toolExecutor = async (toolName, argsJson, _requestID) => {
-          const t = tools[toolName]
+          const t = effectiveTools[toolName]
           if (!t || !t.execute) {
             return { result: "", error: `Unknown tool: ${toolName}` }
           }
@@ -261,7 +269,7 @@ const live: Layer.Layer<
         }
 
         const ruleset = Permission.merge(input.agent.permission ?? [], input.permission ?? [])
-        workflowModel.sessionPreapprovedTools = Object.keys(tools).filter((name) => {
+        workflowModel.sessionPreapprovedTools = Object.keys(effectiveTools).filter((name) => {
           const match = ruleset.findLast((rule) => Wildcard.match(name, rule.permission))
           return !match || match.action !== "ask"
         })
@@ -338,7 +346,7 @@ const live: Layer.Layer<
         },
         async experimental_repairToolCall(failed) {
           const lower = failed.toolCall.toolName.toLowerCase()
-          if (lower !== failed.toolCall.toolName && tools[lower]) {
+          if (lower !== failed.toolCall.toolName && effectiveTools[lower]) {
             l.info("repairing tool call", {
               tool: failed.toolCall.toolName,
               repaired: lower,
@@ -361,8 +369,8 @@ const live: Layer.Layer<
         topP: params.topP,
         topK: params.topK,
         providerOptions: ProviderTransform.providerOptions(input.model, params.options),
-        activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
-        tools,
+        activeTools: Object.keys(effectiveTools).filter((x) => x !== "invalid"),
+        tools: effectiveTools,
         toolChoice: input.toolChoice,
         maxOutputTokens: params.maxOutputTokens,
         abortSignal: input.abort,
@@ -374,6 +382,14 @@ const live: Layer.Layer<
                 "x-opencode-request": input.user.id,
                 "x-opencode-client": Flag.OPENCODE_CLIENT,
               }
+            : input.model.providerID === "codex"
+              ? {
+                  "x-session-affinity": input.sessionID,
+                  "x-client-request-id": input.sessionID,
+                  session_id: input.sessionID,
+                  "User-Agent": `opencode/${InstallationVersion}`,
+                  version: InstallationVersion,
+                }
             : {
                 "x-session-affinity": input.sessionID,
                 ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),

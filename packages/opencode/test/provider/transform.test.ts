@@ -83,6 +83,20 @@ describe("ProviderTransform.options - setCacheKey", () => {
     expect(result.promptCacheKey).toBe(sessionID)
   })
 
+  test("should not set promptCacheKey for native codex provider", () => {
+    const codexModel = {
+      ...mockModel,
+      providerID: "codex",
+      api: {
+        id: "gpt-5.3-codex",
+        url: "https://codex.example.test",
+        npm: "@opencode-ai/codex",
+      },
+    }
+    const result = ProviderTransform.options({ model: codexModel, sessionID, providerOptions: {} })
+    expect(result.promptCacheKey).toBeUndefined()
+  })
+
   test("should set store=false for openai provider", () => {
     const openaiModel = {
       ...mockModel,
@@ -95,6 +109,24 @@ describe("ProviderTransform.options - setCacheKey", () => {
     }
     const result = ProviderTransform.options({
       model: openaiModel,
+      sessionID,
+      providerOptions: {},
+    })
+    expect(result.store).toBe(false)
+  })
+
+  test("should set store=false for codex provider", () => {
+    const codexModel = {
+      ...mockModel,
+      providerID: "codex",
+      api: {
+        id: "gpt-5.3-codex",
+        url: "https://codex.example.test",
+        npm: "@ai-sdk/openai",
+      },
+    }
+    const result = ProviderTransform.options({
+      model: codexModel,
       sessionID,
       providerOptions: {},
     })
@@ -307,6 +339,40 @@ describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
     const model = createGpt5Model("gpt-5.2-codex")
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
     expect(result.textVerbosity).toBeUndefined()
+  })
+})
+
+describe("ProviderTransform.smallOptions - codex", () => {
+  test("codex gpt-5 models keep store=false in small mode", () => {
+    const model = {
+      id: "codex/gpt-5.3-codex",
+      providerID: "codex",
+      api: {
+        id: "gpt-5.3-codex",
+        url: "https://codex.example.test",
+        npm: "@ai-sdk/openai",
+      },
+      name: "gpt-5.3-codex",
+      capabilities: {
+        temperature: true,
+        reasoning: true,
+        attachment: true,
+        toolcall: true,
+        input: { text: true, audio: false, image: true, video: false, pdf: false },
+        output: { text: true, audio: false, image: false, video: false, pdf: false },
+        interleaved: false,
+      },
+      cost: { input: 0.03, output: 0.06, cache: { read: 0.001, write: 0.002 } },
+      limit: { context: 128000, output: 4096 },
+      status: "active",
+      options: {},
+      headers: {},
+      release_date: "2025-01-01",
+    } as any
+
+    expect(ProviderTransform.smallOptions(model)).toMatchObject({
+      store: false,
+    })
   })
 })
 

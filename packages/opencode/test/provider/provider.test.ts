@@ -115,6 +115,75 @@ test("provider loaded from config with apiKey option", async () => {
   })
 })
 
+test("preserves configured transport for providers", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            "local-llm": {
+              name: "Local LLM",
+              npm: "@ai-sdk/openai",
+              transport: "responses",
+              env: [],
+              models: {
+                "gpt-local": {
+                  name: "GPT Local",
+                  tool_call: true,
+                  limit: { context: 8192, output: 2048 },
+                },
+              },
+              options: {
+                apiKey: "not-needed",
+                baseURL: "https://example.test/v1",
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const providers = await list()
+      expect(providers[ProviderID.make("local-llm")]).toBeDefined()
+      expect(providers[ProviderID.make("local-llm")].transport).toBe("responses")
+    },
+  })
+})
+
+test("preserves configured transport for existing providers", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: {
+              transport: "responses",
+            },
+          },
+        }),
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    init: async () => {
+      set("ANTHROPIC_API_KEY", "test-api-key")
+    },
+    fn: async () => {
+      const providers = await list()
+      expect(providers[ProviderID.anthropic]).toBeDefined()
+      expect(providers[ProviderID.anthropic].transport).toBe("responses")
+    },
+  })
+})
+
 test("disabled_providers excludes provider", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -1107,6 +1176,39 @@ test("provider with custom npm package", async () => {
       expect(providers[ProviderID.make("local-llm")]).toBeDefined()
       expect(providers[ProviderID.make("local-llm")].models["llama-3"].api.npm).toBe("@ai-sdk/openai-compatible")
       expect(providers[ProviderID.make("local-llm")].options.baseURL).toBe("http://localhost:11434/v1")
+    },
+  })
+})
+
+test("codex inherits openai models when no explicit models are configured", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            codex: {
+              name: "Codex",
+              npm: "@ai-sdk/openai",
+              transport: "responses",
+              options: {
+                apiKey: "test-codex-key",
+                baseURL: "https://codex.example.test/v1",
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const providers = await list()
+      expect(providers[ProviderID.codex]).toBeDefined()
+      expect(providers[ProviderID.codex].models["gpt-5"]).toBeDefined()
+      expect(String(providers[ProviderID.codex].models["gpt-5"].providerID)).toBe("codex")
     },
   })
 })

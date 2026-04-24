@@ -12,6 +12,7 @@ export const ProviderID = providerIdSchema.pipe(
     zod: zod(schema),
     // Well-known providers
     opencode: schema.make("opencode"),
+    codex: schema.make("codex"),
     anthropic: schema.make("anthropic"),
     openai: schema.make("openai"),
     google: schema.make("google"),
