@@ -11,6 +11,10 @@ Responses API gateways.
 - Sends Codex compatibility headers such as `x-client-request-id`,
   `x-codex-window-id`, and installation metadata.
 - Maps Codex tool calls back into OpenCode's normal tool execution flow.
+- Sends OpenCode, plugin, and MCP function tools to Codex-compatible gateways as
+  portable JSON-schema function tools.
+- Keeps Claude/OmO/Superpowers skills discoverable from `~/.claude/skills` and
+  `~/.agents/skills`.
 - Lets you configure a private Codex-compatible API base without a MITM proxy.
 
 ## Configure
@@ -43,6 +47,36 @@ Rules:
 - Use models as `codex/<model>`, for example `codex/gpt-5.4`.
 - `auth login` stores credentials in `~/.local/share/opencode/auth.json`, not in
   `opencode.json`.
+
+## Skills and Tools
+
+`opencode-codex` should expose the same user skill trees as normal OpenCode:
+
+- `~/.claude/skills/**/SKILL.md`
+- `~/.agents/skills/**/SKILL.md`
+- project `.claude/skills/**/SKILL.md`
+- project `.agents/skills/**/SKILL.md`
+- configured `skills.paths`
+- configured `skills.urls`
+
+Nested skills such as `~/.claude/skills/Utilities/Documents/SKILL.md` are
+supported. Setting `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` disables only the
+Claude Code compatibility skill behavior; it does not hide OmO/Superpowers skill
+trees. Set `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` only when you intentionally want
+to disable all external `.claude` and `.agents` skill discovery.
+
+Codex provider tool behavior:
+
+- `apply_patch` is declared as a Codex custom grammar tool.
+- OpenCode `bash` is declared as a portable JSON-schema function tool instead
+  of native Codex `local_shell`, because this private gateway rejects native
+  `local_shell`.
+- OpenCode built-in tools, plugin tools, and MCP tools are declared as generic
+  Codex function tools when they have JSON-schema input.
+
+This is first-class OpenCode provider behavior for this private gateway, but it
+is still Codex-compatible gateway mode rather than exact upstream Codex CLI wire
+parity for shell execution.
 
 ## Auth
 
@@ -161,6 +195,26 @@ If the model replies with code text but does not write files:
   file creation.
 - Retry with `--pure` and a local `opencode.json` that allows `apply_patch`.
 - Use `--dangerously-skip-permissions` only in a disposable test directory.
+
+If a skill such as `Documents` is missing:
+
+- Confirm the skill file has frontmatter with a `name` matching the name you ask
+  the `skill` tool to load. Skill names are case-sensitive.
+- Confirm the skill lives under one of the scanned trees, for example
+  `~/.claude/skills/Utilities/Documents/SKILL.md`.
+- Confirm `OPENCODE_DISABLE_EXTERNAL_SKILLS` is not set.
+- Run the same `opencode-codex` binary you installed with `./install.sh`; stale
+  binaries may not include the private skill-discovery behavior.
+- Add an explicit config path if needed:
+
+  ```json
+  {
+    "$schema": "https://opencode.ai/config.json",
+    "skills": {
+      "paths": ["~/.claude/skills", "~/.agents/skills"]
+    }
+  }
+  ```
 
 If the binary is missing:
 

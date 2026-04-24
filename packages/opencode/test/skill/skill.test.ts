@@ -215,6 +215,43 @@ description: A skill in the .claude/skills directory.
     }),
   )
 
+  it.live("discovers nested global skills from ~/.claude/skills/ directory", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true })),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+
+      yield* withHome(
+        tmp.path,
+        Effect.gen(function* () {
+          const skillDir = path.join(tmp.path, ".claude", "skills", "Utilities", "Documents")
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(skillDir, "SKILL.md"),
+              `---
+name: Documents
+description: Document processing skill.
+---
+
+# Documents
+`,
+            ),
+          )
+
+          yield* Effect.gen(function* () {
+            const skill = yield* Skill.Service
+            const item = yield* skill.get("Documents")
+            expect(item).toBeDefined()
+            expect(item!.description).toBe("Document processing skill.")
+            expect(item!.location).toBe(path.join(skillDir, "SKILL.md"))
+            expect(yield* skill.dirs()).toContain(skillDir)
+          }).pipe(provideInstance(tmp.path))
+        }),
+      )
+    }),
+  )
+
   it.live("returns empty array when no skills exist", () =>
     provideTmpdirInstance(
       () =>
@@ -288,6 +325,43 @@ This skill is loaded from the global home directory.
             expect(list[0].name).toBe("global-agent-skill")
             expect(list[0].description).toBe("A global skill from ~/.agents/skills for testing.")
             expect(list[0].location).toContain(path.join(".agents", "skills", "global-agent-skill", "SKILL.md"))
+          }).pipe(provideInstance(tmp.path))
+        }),
+      )
+    }),
+  )
+
+  it.live("discovers nested global skills from ~/.agents/skills/ directory", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true })),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+
+      yield* withHome(
+        tmp.path,
+        Effect.gen(function* () {
+          const skillDir = path.join(tmp.path, ".agents", "skills", "Utilities", "Documents")
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(skillDir, "SKILL.md"),
+              `---
+name: agent-documents
+description: Agent document processing skill.
+---
+
+# Agent Documents
+`,
+            ),
+          )
+
+          yield* Effect.gen(function* () {
+            const skill = yield* Skill.Service
+            const item = yield* skill.get("agent-documents")
+            expect(item).toBeDefined()
+            expect(item!.description).toBe("Agent document processing skill.")
+            expect(item!.location).toBe(path.join(skillDir, "SKILL.md"))
+            expect(yield* skill.dirs()).toContain(skillDir)
           }).pipe(provideInstance(tmp.path))
         }),
       )
@@ -388,4 +462,102 @@ description: A skill in the .opencode/skills directory.
       { git: true },
     ),
   )
+
+  it.live("discovers nested skills from configured skills.paths", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const skillDir = path.join(dir, "external-skills", "Utilities", "Documents")
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(skillDir, "SKILL.md"),
+              `---
+name: config-documents
+description: Config path nested document skill.
+---
+
+# Config Documents
+`,
+            ),
+          )
+
+          const skill = yield* Skill.Service
+          const item = yield* skill.get("config-documents")
+          expect(item).toBeDefined()
+          expect(item!.description).toBe("Config path nested document skill.")
+          expect(item!.location).toBe(path.join(skillDir, "SKILL.md"))
+          expect(yield* skill.dirs()).toContain(skillDir)
+        }),
+      {
+        git: true,
+        config: {
+          skills: {
+            paths: ["external-skills"],
+          },
+        },
+      },
+    ),
+  )
+
+  it.live("discovers bundled skills from configured plugin packages", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const pluginTarget = path.join(dir, "plugins", "superpowers")
+          const skillDir = path.join(pluginTarget, "skills", "dispatching-parallel-agents")
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(skillDir, "SKILL.md"),
+              `---
+name: dispatching-parallel-agents
+description: Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies
+---
+
+# Dispatching Parallel Agents
+`,
+            ),
+          )
+          yield* Effect.promise(() =>
+            Bun.write(path.join(pluginTarget, "package.json"), JSON.stringify({ name: "superpowers" })),
+          )
+
+          const skill = yield* Skill.Service
+          const item = yield* skill.get("dispatching-parallel-agents")
+          expect(item).toBeDefined()
+          expect(item!.location).toBe(path.join(skillDir, "SKILL.md"))
+          expect(yield* skill.dirs()).toContain(skillDir)
+        }),
+      {
+        git: true,
+        config: {
+          plugin: ["./plugins/superpowers"],
+        },
+      },
+    ),
+  )
+
+  it.live("does not discover bundled skills from unconfigured cached packages", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(dir, "unrelated-cache", "node_modules", "superpowers", "skills", "unconfigured", "SKILL.md"),
+              `---
+name: unconfigured
+description: Unconfigured cached package skill.
+---
+
+# Unconfigured
+`,
+            ),
+          )
+
+          const skill = yield* Skill.Service
+          expect(yield* skill.get("unconfigured")).toBeUndefined()
+        }),
+      { git: true },
+    ),
+  )
+
 })
