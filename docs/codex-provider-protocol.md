@@ -42,7 +42,6 @@ Provider config should use:
       "name": "Codex",
       "env": ["CODEX_API_KEY"],
       "npm": "@opencode-ai/codex",
-      "transport": "responses",
       "options": {
         "baseURL": "https://your-codex-gateway.example/codex/v1"
       }

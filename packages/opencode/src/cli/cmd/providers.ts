@@ -248,7 +248,6 @@ export function codexProviderConfig(baseURL: string) {
     env: ["CODEX_API_KEY"],
     npm: "@opencode-ai/codex",
     api: baseURL,
-    transport: "responses" as const,
     options: {
       baseURL,
     },

@@ -51,7 +51,6 @@ describe("provider auth helpers", () => {
       env: ["CODEX_API_KEY"],
       npm: "@opencode-ai/codex",
       api: "https://codex.example.test/v1",
-      transport: "responses",
       options: {
         baseURL: "https://codex.example.test/v1",
       },
