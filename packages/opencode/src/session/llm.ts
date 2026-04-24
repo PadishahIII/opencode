@@ -142,6 +142,7 @@ const live: Layer.Layer<
         mergeDeep(variant),
       )
       if (input.model.providerID === "codex") {
+        options.sessionID = input.sessionID
         delete options.include
         delete options.promptCacheKey
         delete options.reasoningSummary

@@ -245,6 +245,9 @@ describe("session.llm.codex responses tools", () => {
         })
 
         const capture = await request
+        const turnMetadata = JSON.parse(capture.headers.get("x-codex-turn-metadata") ?? "{}") as {
+          session_id?: string
+        }
         const body = capture.body as {
           instructions?: string
           include?: string[]
@@ -255,6 +258,10 @@ describe("session.llm.codex responses tools", () => {
         }
 
         expect(capture.url.pathname.endsWith("/responses")).toBe(true)
+        expect(capture.headers.get("x-client-request-id")).toBe(sessionID)
+        expect(capture.headers.get("session_id")).toBe(sessionID)
+        expect(turnMetadata.session_id).toBe(sessionID)
+        expect(body.prompt_cache_key).toBe(sessionID)
         expect(typeof body.instructions).toBe("string")
         expect(body.reasoning?.summary).toBeUndefined()
         expect(Array.isArray(body.tools)).toBe(true)
