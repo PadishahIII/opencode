@@ -1,97 +1,22 @@
 # Codex Private Build Guide
 
-This guide is for the private OpenCode build that includes the native `codex`
-provider. It covers building the local binary, installing it under a separate
-command name, configuring a Codex-compatible API base, and running a smoke test.
+This private OpenCode build adds a native `codex` provider for Codex-compatible
+Responses API gateways.
 
-## What This Build Adds
+## Features
 
-The private build adds a first-class `codex` provider. Use it when your API
-provider expects Codex CLI-style Responses API requests instead of generic
-OpenAI-compatible chat requests.
+- Adds `codex` as a first-class provider id.
+- Supports model selection like `codex/gpt-5.4`.
+- Sends Codex-style requests to `POST <baseURL>/responses`.
+- Sends Codex compatibility headers such as `x-client-request-id`,
+  `x-codex-window-id`, and installation metadata.
+- Maps Codex tool calls back into OpenCode's normal tool execution flow.
+- Lets you configure a private Codex-compatible API base without a MITM proxy.
 
-The provider sends requests to:
+## Configure
 
-```txt
-POST <baseURL>/responses
-```
-
-It also sends Codex compatibility headers and maps Codex tool calls back into
-OpenCode's normal tool execution flow.
-
-## Requirements
-
-- macOS arm64 for the binary path used by these scripts.
-- Bun 1.3 or newer.
-- This repository checked out with the Codex provider patch applied.
-- A Codex-compatible API key and base URL.
-
-## Build
-
-From the repository root:
-
-```bash
-./build.sh
-```
-
-The script runs the upstream OpenCode build with Bun `1.3.13` by default and
-verifies this binary exists:
-
-```txt
-packages/opencode/dist/opencode-darwin-arm64/bin/opencode
-```
-
-To use a different Bun version:
-
-```bash
-BUN_VERSION=1.3.13 ./build.sh
-```
-
-You can also run the upstream build command directly:
-
-```bash
-bunx bun@1.3.13 run packages/opencode/script/build.ts
-```
-
-## Install
-
-Install the private build as `opencode-codex`:
-
-```bash
-./install.sh
-```
-
-This creates a symlink in `~/.local/bin` by default:
-
-```txt
-~/.local/bin/opencode-codex -> packages/opencode/dist/opencode-darwin-arm64/bin/opencode
-```
-
-If `~/.local/bin` is not in your `PATH`, add it to your shell profile:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Install with a custom command name:
-
-```bash
-./install.sh --name opencode-private
-```
-
-Replace the normal `opencode` command with this private build:
-
-```bash
-./install.sh --replace
-```
-
-Use `--replace` only if you intentionally want this build to shadow any other
-OpenCode installation in your `PATH`.
-
-## Configure the Codex Provider
-
-The provider id must be `codex`. The model selector should look like
-`codex/<model>`, for example `codex/gpt-5.4`.
+The provider id must be `codex`. A custom provider id such as `other` or
+`internalcodex` will not use the native Codex transport.
 
 Create or update your OpenCode config at `~/.config/opencode/opencode.json`:
 
@@ -103,7 +28,6 @@ Create or update your OpenCode config at `~/.config/opencode/opencode.json`:
       "name": "Codex",
       "env": ["CODEX_API_KEY"],
       "npm": "@opencode-ai/codex",
-      "transport": "responses",
       "options": {
         "baseURL": "https://your-codex-gateway.example/v1"
       }
@@ -112,36 +36,76 @@ Create or update your OpenCode config at `~/.config/opencode/opencode.json`:
 }
 ```
 
-Important details:
+Rules:
 
 - Set `baseURL` to the parent URL that has a `/responses` endpoint.
 - Do not include `/responses` in `baseURL`; the provider appends it.
-- Keep the provider id as `codex`; `other/gpt-5.4` or a custom provider id will
-  not use the native Codex transport.
+- Use models as `codex/<model>`, for example `codex/gpt-5.4`.
 - `auth login` stores credentials in `~/.local/share/opencode/auth.json`, not in
   `opencode.json`.
 
-## Add Auth
+## Auth
 
-Option 1: use environment auth.
+Use environment auth:
 
 ```bash
 export CODEX_API_KEY="your-api-key"
 ```
 
-Option 2: use OpenCode auth storage.
+Or use OpenCode auth storage:
 
 ```bash
 opencode-codex auth login
-```
-
-Select `Codex` and enter the API key. Then verify it appears:
-
-```bash
 opencode-codex auth list
 ```
 
-## Run
+Select `Codex` when prompted.
+
+## Build and Install
+
+Requirements:
+
+- macOS arm64 for the binary path used by these scripts.
+- Bun 1.3 or newer.
+- This repository checked out with the Codex provider patch applied.
+
+Build from the repository root:
+
+```bash
+./build.sh
+```
+
+This creates and verifies:
+
+```txt
+packages/opencode/dist/opencode-darwin-arm64/bin/opencode
+```
+
+Install as `opencode-codex`:
+
+```bash
+./install.sh
+```
+
+Install with another command name:
+
+```bash
+./install.sh --name opencode-private
+```
+
+Replace the normal `opencode` command with this private build:
+
+```bash
+./install.sh --replace
+```
+
+If `~/.local/bin` is not in `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+## Use
 
 Use the private build with a Codex model:
 
@@ -190,7 +154,6 @@ If requests hit the wrong endpoint:
 - Confirm `provider.codex.options.baseURL` is set in
   `~/.config/opencode/opencode.json`.
 - Confirm the configured URL does not already end in `/responses`.
-- Confirm `transport` is `responses`.
 
 If the model replies with code text but does not write files:
 
