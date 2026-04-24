@@ -1654,6 +1654,13 @@ const layer: Layer.Layer<
       const provider = s.providers[providerID]
       if (!provider) return undefined
 
+      if (providerID === ProviderID.codex && cfg.model) {
+        const parsed = parseModel(cfg.model)
+        if (parsed.providerID === ProviderID.codex && provider.models[parsed.modelID]) {
+          return yield* getModel(parsed.providerID, parsed.modelID)
+        }
+      }
+
       let priority = [
         "claude-haiku-4-5",
         "claude-haiku-4.5",

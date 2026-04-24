@@ -80,7 +80,7 @@ export function convertCodexInput(options: Pick<LanguageModelV3CallOptions, "pro
             })
             continue
           }
-          if (part.toolName === "bash" || part.toolName === "local_shell") {
+          if (part.toolName === "local_shell") {
             input.push({
               type: "local_shell_call",
               call_id: part.toolCallId,
@@ -113,7 +113,7 @@ export function convertCodexInput(options: Pick<LanguageModelV3CallOptions, "pro
       for (const part of message.content) {
         if (part.type !== "tool-result") continue
         const out = outputText(part.output)
-        if (part.toolName === "bash" || part.toolName === "local_shell") {
+        if (part.toolName === "local_shell") {
           input.push({ type: "local_shell_call_output", call_id: part.toolCallId, output: out })
           continue
         }

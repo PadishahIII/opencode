@@ -186,8 +186,7 @@ describe("session.llm.codex responses tools", () => {
             provider: {
               codex: {
                 name: "Codex",
-                npm: "@ai-sdk/openai",
-                transport: "responses",
+                npm: "@opencode-ai/codex",
                 models: {
                   [model.id]: model,
                 },
@@ -232,6 +231,16 @@ describe("session.llm.codex responses tools", () => {
           messages: [{ role: "user", content: "Hello" }],
           tools: {
             apply_patch: openai.tools.applyPatch({}),
+            bash: tool({
+              description: "Run shell commands",
+              inputSchema: z.object({ command: z.string() }),
+              execute: async () => ({ output: "ok" }),
+            }),
+            read: tool({
+              description: "Read file contents",
+              inputSchema: z.object({ filePath: z.string() }),
+              execute: async () => ({ output: "ok" }),
+            }),
           },
         })
 
@@ -256,6 +265,20 @@ describe("session.llm.codex responses tools", () => {
               (item.type === "custom" && item.name === "apply_patch") || item.type === "apply_patch",
           ),
         ).toBe(true)
+        expect(body.tools).toContainEqual(
+          expect.objectContaining({
+            type: "function",
+            name: "bash",
+            parameters: expect.objectContaining({ type: "object" }),
+          }),
+        )
+        expect(body.tools).toContainEqual(
+          expect.objectContaining({
+            type: "function",
+            name: "read",
+            parameters: expect.objectContaining({ type: "object" }),
+          }),
+        )
       },
     })
   })

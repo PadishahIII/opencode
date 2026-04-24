@@ -72,6 +72,7 @@ export class CodexLanguageModel implements LanguageModelV3 {
     const warnings = [...input.warnings, ...tools.warnings] as SharedV3Warning[]
     const codexOptions = options.providerOptions?.codex ?? {}
     const openaiOptions = options.providerOptions?.openai ?? {}
+    const requestID = (codexOptions.sessionID as string | undefined) ?? this.config.sessionID
     const body = compact({
       model: this.modelId,
       instructions: (codexOptions.instructions as string | undefined) ?? input.instructions,
@@ -83,26 +84,33 @@ export class CodexLanguageModel implements LanguageModelV3 {
       store: (codexOptions.store ?? openaiOptions.store ?? false) as unknown,
       stream: true,
       include: (codexOptions.include ?? openaiOptions.include ?? []) as unknown,
-      prompt_cache_key: (codexOptions.promptCacheKey ?? openaiOptions.promptCacheKey) as unknown,
+      prompt_cache_key: (codexOptions.promptCacheKey ?? openaiOptions.promptCacheKey ?? requestID) as unknown,
       text: codexOptions.text as unknown,
       client_metadata: compact({
-        client: "opencode",
-        provider: "codex",
-        session_id: codexOptions.sessionID,
-        window_id: this.config.windowID,
+        "x-codex-installation-id": this.config.installationID,
       }),
+    })
+    const turnMetadata = JSON.stringify({
+      session_id: requestID,
+      thread_source: "user",
+      turn_id: crypto.randomUUID(),
+      sandbox: "none",
     })
 
     const headers = compact({
       Authorization: this.config.apiKey ? `Bearer ${this.config.apiKey}` : undefined,
       Accept: "text/event-stream",
       "Content-Type": "application/json",
-      "x-client-request-id": crypto.randomUUID(),
+      ...this.config.headers,
+      ...options.headers,
+      originator: this.config.originator,
+      "User-Agent": this.config.userAgent,
+      "x-client-request-id": requestID,
+      session_id: requestID,
+      "x-codex-turn-metadata": turnMetadata,
       "x-codex-window-id": this.config.windowID,
       "x-codex-installation-id": this.config.installationID,
       "ChatGPT-Account-ID": this.config.accountID,
-      ...this.config.headers,
-      ...options.headers,
     }) as Record<string, string>
 
     const response = await this.config.fetch(`${this.config.baseURL}/responses`, {

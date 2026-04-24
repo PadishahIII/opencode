@@ -1090,6 +1090,45 @@ test("getSmallModel respects config small_model override", async () => {
   })
 })
 
+test("getSmallModel uses configured codex model before codex mini defaults", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          model: "codex/gpt-5.5",
+          provider: {
+            codex: {
+              name: "Codex",
+              env: ["CODEX_API_KEY"],
+              npm: "@opencode-ai/codex",
+              options: {
+                apiKey: "test-codex-key",
+                baseURL: "https://codex.example.test/v1",
+              },
+              models: {
+                "gpt-5.5": {
+                  name: "GPT 5.5",
+                },
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const model = await getSmallModel(ProviderID.codex)
+      expect(model).toBeDefined()
+      expect(String(model?.providerID)).toBe("codex")
+      expect(String(model?.id)).toBe("gpt-5.5")
+    },
+  })
+})
+
 test("provider.sort prioritizes preferred models", () => {
   const models = [
     { id: "random-model", name: "Random" },

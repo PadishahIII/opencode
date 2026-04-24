@@ -17,6 +17,9 @@ describe("codex sdk", () => {
       baseURL: "https://example.test/codex/v1",
       installationID: "install-test",
       windowID: "window-test",
+      sessionID: "session-test",
+      originator: "codex_exec",
+      userAgent: "codex_exec/0.124.0 test",
       fetch: (async (url, init) => {
         request = {
           url: String(url),
@@ -47,12 +50,22 @@ describe("codex sdk", () => {
     expect(request?.url).toBe("https://example.test/codex/v1/responses")
     expect(request?.headers.get("authorization")).toBe("Bearer test-codex-key")
     expect(request?.headers.get("accept")).toContain("text/event-stream")
+    expect(request?.headers.get("originator")).toBe("codex_exec")
+    expect(request?.headers.get("user-agent")).toBe("codex_exec/0.124.0 test")
     expect(request?.headers.get("x-codex-window-id")).toBe("window-test")
     expect(request?.headers.get("x-codex-installation-id")).toBe("install-test")
+    expect(request?.headers.get("x-client-request-id")).toBe("session-test")
+    expect(request?.headers.get("session_id")).toBe("session-test")
+    expect(JSON.parse(request?.headers.get("x-codex-turn-metadata") ?? "{}")).toMatchObject({
+      session_id: "session-test",
+      thread_source: "user",
+      sandbox: "none",
+    })
     expect(request?.body.model).toBe("gpt-5.4")
     expect(request?.body.instructions).toBe("system text")
     expect(request?.body.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "hello" }] }])
-    expect(request?.body.client_metadata).toMatchObject({ client: "opencode", provider: "codex", window_id: "window-test" })
+    expect(request?.body.prompt_cache_key).toBe("session-test")
+    expect(request?.body.client_metadata).toMatchObject({ "x-codex-installation-id": "install-test" })
   })
 
   test("parses codex apply_patch calls as client tool calls", async () => {
@@ -133,5 +146,106 @@ describe("codex sdk", () => {
         format: expect.objectContaining({ type: "grammar", syntax: "lark" }),
       }),
     )
+  })
+
+  test("declares bash as a portable function tool", async () => {
+    let request: { body: any } | undefined
+    const provider = createCodexProvider({
+      apiKey: "test-codex-key",
+      baseURL: "https://example.test/v1",
+      fetch: (async (_url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
+        request = { body: JSON.parse(String(init?.body)) }
+        return eventStream([
+          { type: "response.created", response: { id: "resp_test", created_at: 1, model: "gpt-5.4" } },
+          { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } },
+        ])
+      }) as unknown as typeof fetch,
+    })
+
+    await streamText({
+      model: provider.responses("gpt-5.4"),
+      messages: [{ role: "user", content: "run pwd" }],
+      tools: {
+        bash: tool({
+          description: "run shell command",
+          inputSchema: z.object({ command: z.string() }),
+          execute: async () => ({ output: "ok" }),
+        }),
+      },
+    }).consumeStream()
+
+    expect(request?.body.tools).toContainEqual(
+      expect.objectContaining({
+        type: "function",
+        name: "bash",
+        parameters: expect.objectContaining({ type: "object" }),
+      }),
+    )
+  })
+
+  test("declares generic function tools for codex", async () => {
+    let request: { body: any } | undefined
+    const provider = createCodexProvider({
+      apiKey: "test-codex-key",
+      baseURL: "https://example.test/v1",
+      fetch: (async (_url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
+        request = { body: JSON.parse(String(init?.body)) }
+        return eventStream([
+          { type: "response.created", response: { id: "resp_test", created_at: 1, model: "gpt-5.4" } },
+          { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } },
+        ])
+      }) as unknown as typeof fetch,
+    })
+
+    await streamText({
+      model: provider.responses("gpt-5.4"),
+      messages: [{ role: "user", content: "read a file" }],
+      tools: {
+        read: tool({
+          description: "read file contents",
+          inputSchema: z.object({ filePath: z.string() }),
+          execute: async () => ({ output: "ok" }),
+        }),
+      },
+    }).consumeStream()
+
+    expect(request?.body.tools).toContainEqual(
+      expect.objectContaining({
+        type: "function",
+        name: "read",
+        description: "read file contents",
+        strict: false,
+        parameters: expect.objectContaining({ type: "object" }),
+      }),
+    )
+  })
+
+  test("filters external function tools for codex", async () => {
+    let request: { body: any } | undefined
+    const provider = createCodexProvider({
+      apiKey: "test-codex-key",
+      baseURL: "https://example.test/v1",
+      fetch: (async (_url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
+        request = { body: JSON.parse(String(init?.body)) }
+        return eventStream([
+          { type: "response.created", response: { id: "resp_test", created_at: 1, model: "gpt-5.4" } },
+          { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } },
+        ])
+      }) as unknown as typeof fetch,
+    })
+
+    await streamText({
+      model: provider.responses("gpt-5.4"),
+      messages: [{ role: "user", content: "use external tool" }],
+      tools: {
+        "external-mcp_tool": tool({
+          description: "external MCP tool",
+          inputSchema: z.object({ value: z.string() }),
+          execute: async () => ({ output: "ok" }),
+        }),
+      },
+    }).consumeStream()
+
+    expect(request?.body.tools).toEqual([])
   })
 })
