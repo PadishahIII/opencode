@@ -34,7 +34,11 @@ cd "$SCRIPT_DIR"
 BUN_VERSION="${BUN_VERSION:-1.3.13}"
 
 echo "Building OpenCode with bun@$BUN_VERSION..."
-bunx "bun@$BUN_VERSION" run packages/opencode/script/build.ts
+if [[ "$(bun --version)" == "$BUN_VERSION" ]]; then
+  bun --bun run packages/opencode/script/build.ts --single --skip-install
+else
+  bunx "bun@$BUN_VERSION" --bun run packages/opencode/script/build.ts --single --skip-install
+fi
 
 if [[ ! -x "$BIN" ]]; then
   echo "error: expected binary was not created or is not executable:" >&2
