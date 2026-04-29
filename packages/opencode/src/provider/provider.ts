@@ -1,28 +1,28 @@
 import os from "os"
 import fuzzysort from "fuzzysort"
-import { Config } from "../config"
+import { Config } from "@/config/config"
 import { mapValues, mergeDeep, omit, pickBy, sortBy } from "remeda"
 import { NoSuchModelError, type Provider as SDK } from "ai"
-import { Log } from "../util"
-import { Npm } from "../npm"
-import { Hash } from "@opencode-ai/shared/util/hash"
+import * as Log from "@opencode-ai/core/util/log"
+import { Npm } from "@opencode-ai/core/npm"
+import { Hash } from "@opencode-ai/core/util/hash"
 import { Plugin } from "../plugin"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
 import * as ModelsDev from "./models"
 import { Auth } from "../auth"
 import { Env } from "../env"
-import { InstallationVersion } from "../installation/version"
-import { Flag } from "../flag/flag"
+import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { zod } from "@/util/effect-zod"
 import { namedSchemaError } from "@/util/named-schema-error"
 import { iife } from "@/util/iife"
-import { Global } from "../global"
+import { Global } from "@opencode-ai/core/global"
 import path from "path"
 import { pathToFileURL } from "url"
 import { Effect, Layer, Context, Schema, Types } from "effect"
-import { EffectBridge } from "@/effect"
-import { InstanceState } from "@/effect"
-import { AppFileSystem } from "@opencode-ai/shared/filesystem"
+import { EffectBridge } from "@/effect/bridge"
+import { InstanceState } from "@/effect/instance-state"
+import { AppFileSystem } from "@opencode-ai/core/filesystem"
 import { isRecord } from "@/util/record"
 import { withStatics } from "@/util/schema"
 
@@ -87,8 +87,6 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
 
 type BundledSDK = {
   languageModel(modelId: string): LanguageModelV3
-  responses?: (modelId: string) => LanguageModelV3
-  chat?: (modelId: string) => LanguageModelV3
 }
 
 const BUNDLED_PROVIDERS: Record<string, () => Promise<(opts: any) => BundledSDK>> = {
@@ -114,8 +112,7 @@ const BUNDLED_PROVIDERS: Record<string, () => Promise<(opts: any) => BundledSDK>
   "@ai-sdk/vercel": () => import("@ai-sdk/vercel").then((m) => m.createVercel),
   "@ai-sdk/alibaba": () => import("@ai-sdk/alibaba").then((m) => m.createAlibaba),
   "gitlab-ai-provider": () => import("gitlab-ai-provider").then((m) => m.createGitLab),
-  "@ai-sdk/github-copilot": () => import("./sdk/copilot").then((m) => m.createOpenaiCompatible),
-  "@opencode-ai/codex": () => import("./sdk/codex").then((m) => m.createCodexProvider),
+  "@ai-sdk/github-copilot": () => import("./sdk/copilot/copilot-provider").then((m) => m.createOpenaiCompatible),
   "venice-ai-sdk-provider": () => import("venice-ai-sdk-provider").then((m) => m.createVenice),
 }
 
@@ -139,33 +136,6 @@ type CustomDep = {
 
 function useLanguageModel(sdk: any) {
   return sdk.responses === undefined && sdk.chat === undefined
-}
-
-function cloneModelsForProvider(source: Record<string, Model>, providerID: ProviderID, apiUrl?: string) {
-  return Object.fromEntries(
-    Object.entries(source).map(([id, model]) => {
-      const next = structuredClone(model)
-      next.providerID = providerID
-      if (apiUrl) next.api.url = apiUrl
-      if (providerID === ProviderID.codex) next.api.npm = "@opencode-ai/codex"
-      return [id, next]
-    }),
-  )
-}
-
-function selectLanguageModel(input: { sdk: any; modelID: string; provider: Info }) {
-  if (input.provider.transport === "responses") {
-    if (input.sdk.responses) return input.sdk.responses(input.modelID)
-    throw new Error(`Provider ${input.provider.id} requested responses transport but SDK has no responses() method`)
-  }
-
-  if (input.provider.transport === "chat") {
-    if (input.sdk.chat) return input.sdk.chat(input.modelID)
-    if (useLanguageModel(input.sdk)) return input.sdk.languageModel(input.modelID)
-    throw new Error(`Provider ${input.provider.id} requested chat transport but SDK has no chat() method`)
-  }
-
-  return input.sdk.languageModel(input.modelID)
 }
 
 function custom(dep: CustomDep): Record<string, CustomLoader> {
@@ -208,11 +178,6 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
           return sdk.responses(modelID)
         },
-        options: {},
-      }),
-    codex: () =>
-      Effect.succeed({
-        autoload: false,
         options: {},
       }),
     xai: () =>
@@ -929,7 +894,6 @@ export const Info = Schema.Struct({
   id: ProviderID,
   name: Schema.String,
   source: Schema.Literals(["env", "config", "custom", "api"]),
-  transport: Schema.optional(Schema.Literals(["sdk", "responses", "chat"])),
   env: Schema.Array(Schema.String),
   key: Schema.optional(Schema.String),
   options: Schema.Record(Schema.String, Schema.Any),
@@ -1160,23 +1124,24 @@ const layer: Layer.Layer<
         // extend database from config
         for (const [providerID, provider] of configProviders) {
           const existing = database[providerID]
-          const inheritedModels =
-            existing?.models ??
-            (providerID === ProviderID.codex
-              ? cloneModelsForProvider(database[ProviderID.openai]?.models ?? {}, ProviderID.codex, provider.api)
-              : {})
           const parsed: Info = {
             id: ProviderID.make(providerID),
             name: provider.name ?? existing?.name ?? providerID,
-            transport: provider.transport ?? existing?.transport,
             env: provider.env ?? existing?.env ?? [],
             options: mergeDeep(existing?.options ?? {}, provider.options ?? {}),
             source: "config",
-            models: inheritedModels,
+            models: existing?.models ?? {},
           }
 
           for (const [modelID, model] of Object.entries(provider.models ?? {})) {
             const existingModel = parsed.models[model.id ?? modelID]
+            const apiID = model.id ?? existingModel?.api.id ?? modelID
+            const apiNpm =
+              model.provider?.npm ??
+              provider.npm ??
+              existingModel?.api.npm ??
+              modelsDev[providerID]?.npm ??
+              "@ai-sdk/openai-compatible"
             const name = iife(() => {
               if (model.name) return model.name
               if (model.id && model.id !== modelID) return modelID
@@ -1185,15 +1150,8 @@ const layer: Layer.Layer<
             const parsedModel: Model = {
               id: ModelID.make(modelID),
               api: {
-                id: model.id ?? existingModel?.api.id ?? modelID,
-                npm:
-                  providerID === ProviderID.codex
-                    ? (model.provider?.npm ?? provider.npm ?? "@opencode-ai/codex")
-                    : (model.provider?.npm ??
-                      provider.npm ??
-                      existingModel?.api.npm ??
-                      modelsDev[providerID]?.npm ??
-                      "@ai-sdk/openai-compatible"),
+                id: apiID,
+                npm: apiNpm,
                 url: model.provider?.api ?? provider?.api ?? existingModel?.api.url ?? modelsDev[providerID]?.api ?? "",
               },
               status: model.status ?? existingModel?.status ?? "active",
@@ -1221,7 +1179,12 @@ const layer: Layer.Layer<
                     model.modalities?.output?.includes("video") ?? existingModel?.capabilities.output.video ?? false,
                   pdf: model.modalities?.output?.includes("pdf") ?? existingModel?.capabilities.output.pdf ?? false,
                 },
-                interleaved: model.interleaved ?? false,
+                interleaved:
+                  model.interleaved ??
+                  existingModel?.capabilities.interleaved ??
+                  (!existingModel && apiNpm === "@ai-sdk/openai-compatible" && apiID.includes("deepseek")
+                    ? { field: "reasoning_content" }
+                    : false),
               },
               cost: {
                 input: model?.cost?.input ?? existingModel?.cost?.input ?? 0,
@@ -1324,7 +1287,6 @@ const layer: Layer.Layer<
           const partial: Partial<Info> = { source: "config" }
           if (provider.env) partial.env = provider.env
           if (provider.name) partial.name = provider.name
-          if (provider.transport) partial.transport = provider.transport
           if (provider.options) partial.options = provider.options
           mergeProvider(providerID, partial)
         }
@@ -1396,7 +1358,9 @@ const layer: Layer.Layer<
             )
               delete provider.models[modelID]
 
-            model.variants = mapValues(ProviderTransform.variants(model), (v) => v)
+            if (!model.variants || Object.keys(model.variants).length === 0) {
+              model.variants = mapValues(ProviderTransform.variants(model), (v) => v)
+            }
 
             const configVariants = configProvider?.models?.[modelID]?.variants
             if (configVariants && model.variants) {
@@ -1501,7 +1465,7 @@ const layer: Layer.Layer<
           const combined = signals.length === 0 ? null : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
           if (combined) opts.signal = combined
 
-          // Strip OpenAI itemId metadata for generic OpenAI SDK calls.
+          // Strip openai itemId metadata following what codex does
           if (model.api.npm === "@ai-sdk/openai" && opts.body && opts.method === "POST") {
             const body = JSON.parse(opts.body as string)
             const isAzure = model.providerID.includes("azure")
@@ -1512,8 +1476,8 @@ const layer: Layer.Layer<
                   delete item.id
                 }
               }
+              opts.body = JSON.stringify(body)
             }
-            opts.body = JSON.stringify(body)
           }
 
           const res = await fetchFn(input, {
@@ -1599,21 +1563,14 @@ const layer: Layer.Layer<
       return yield* Effect.promise(async () => {
         const provider = s.providers[model.providerID]
         const sdk = await resolveSDK(model, s, envs)
-        const mergedOptions = {
-          ...provider.options,
-          ...model.options,
-        }
 
         try {
-          const language = provider.transport
-            ? selectLanguageModel({
-                sdk,
-                modelID: model.api.id,
-                provider,
+          const language = s.modelLoaders[model.providerID]
+            ? await s.modelLoaders[model.providerID](sdk, model.api.id, {
+                ...provider.options,
+                ...model.options,
               })
-            : s.modelLoaders[model.providerID]
-              ? await s.modelLoaders[model.providerID](sdk, model.api.id, mergedOptions)
-              : sdk.languageModel(model.api.id)
+            : sdk.languageModel(model.api.id)
           s.models.set(key, language)
           return language
         } catch (e) {
@@ -1654,13 +1611,6 @@ const layer: Layer.Layer<
       const provider = s.providers[providerID]
       if (!provider) return undefined
 
-      if (providerID === ProviderID.codex && cfg.model) {
-        const parsed = parseModel(cfg.model)
-        if (parsed.providerID === ProviderID.codex && provider.models[parsed.modelID]) {
-          return yield* getModel(parsed.providerID, parsed.modelID)
-        }
-      }
-
       let priority = [
         "claude-haiku-4-5",
         "claude-haiku-4.5",
@@ -1670,9 +1620,6 @@ const layer: Layer.Layer<
         "gemini-2.5-flash",
         "gpt-5-nano",
       ]
-      if (providerID === ProviderID.codex) {
-        priority = ["gpt-5.4-mini", "gpt-5-mini", "gpt-5.3-codex-spark", "gpt-5.3-codex", "gpt-5.4", ...priority]
-      }
       if (providerID.startsWith("opencode")) {
         priority = ["gpt-5-nano"]
       }
@@ -1783,3 +1730,5 @@ export const ModelNotFoundError = namedSchemaError("ProviderModelNotFoundError",
 export const InitError = namedSchemaError("ProviderInitError", {
   providerID: ProviderID,
 })
+
+export * as Provider from "./provider"

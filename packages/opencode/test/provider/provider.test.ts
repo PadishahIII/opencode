@@ -3,13 +3,13 @@ import { mkdir, unlink } from "fs/promises"
 import path from "path"
 
 import { tmpdir } from "../fixture/fixture"
-import { Global } from "../../src/global"
+import { Global } from "@opencode-ai/core/global"
 import { Instance } from "../../src/project/instance"
 import { Plugin } from "../../src/plugin/index"
-import { ModelsDev } from "../../src/provider"
-import { Provider } from "../../src/provider"
+import { ModelsDev } from "@/provider/models"
+import { Provider } from "@/provider/provider"
 import { ProviderID, ModelID } from "../../src/provider/schema"
-import { Filesystem } from "../../src/util"
+import { Filesystem } from "@/util/filesystem"
 import { Env } from "../../src/env"
 import { Effect } from "effect"
 import { AppRuntime } from "../../src/effect/app-runtime"
@@ -53,6 +53,14 @@ async function getSmallModel(providerID: ProviderID) {
 
 async function defaultModel() {
   return run((provider) => provider.defaultModel())
+}
+
+async function markPluginDependenciesReady(dir: string) {
+  await mkdir(path.join(dir, "node_modules"), { recursive: true })
+  await Bun.write(
+    path.join(dir, "package-lock.json"),
+    JSON.stringify({ packages: { "": { dependencies: { "@opencode-ai/plugin": "0.0.0" } } } }),
+  )
 }
 
 function paid(providers: Awaited<ReturnType<typeof list>>) {
@@ -111,75 +119,6 @@ test("provider loaded from config with apiKey option", async () => {
     fn: async () => {
       const providers = await list()
       expect(providers[ProviderID.anthropic]).toBeDefined()
-    },
-  })
-})
-
-test("preserves configured transport for providers", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Bun.write(
-        path.join(dir, "opencode.json"),
-        JSON.stringify({
-          $schema: "https://opencode.ai/config.json",
-          provider: {
-            "local-llm": {
-              name: "Local LLM",
-              npm: "@ai-sdk/openai",
-              transport: "responses",
-              env: [],
-              models: {
-                "gpt-local": {
-                  name: "GPT Local",
-                  tool_call: true,
-                  limit: { context: 8192, output: 2048 },
-                },
-              },
-              options: {
-                apiKey: "not-needed",
-                baseURL: "https://example.test/v1",
-              },
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const providers = await list()
-      expect(providers[ProviderID.make("local-llm")]).toBeDefined()
-      expect(providers[ProviderID.make("local-llm")].transport).toBe("responses")
-    },
-  })
-})
-
-test("preserves configured transport for existing providers", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Bun.write(
-        path.join(dir, "opencode.json"),
-        JSON.stringify({
-          $schema: "https://opencode.ai/config.json",
-          provider: {
-            anthropic: {
-              transport: "responses",
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    init: async () => {
-      set("ANTHROPIC_API_KEY", "test-api-key")
-    },
-    fn: async () => {
-      const providers = await list()
-      expect(providers[ProviderID.anthropic]).toBeDefined()
-      expect(providers[ProviderID.anthropic].transport).toBe("responses")
     },
   })
 })
@@ -369,6 +308,67 @@ test("custom provider with npm package", async () => {
       expect(providers[ProviderID.make("custom-provider")]).toBeDefined()
       expect(providers[ProviderID.make("custom-provider")].name).toBe("Custom Provider")
       expect(providers[ProviderID.make("custom-provider")].models["custom-model"]).toBeDefined()
+    },
+  })
+})
+
+test("custom DeepSeek openai-compatible model defaults interleaved reasoning field", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            "custom-provider": {
+              name: "Custom Provider",
+              npm: "@ai-sdk/openai-compatible",
+              api: "https://api.custom.com/v1",
+              models: {
+                "deepseek-r1": {
+                  name: "DeepSeek R1",
+                },
+                "deepseek-details": {
+                  name: "DeepSeek Details",
+                  interleaved: { field: "reasoning_details" },
+                },
+                "custom-model": {
+                  name: "Custom Model",
+                },
+              },
+              options: {
+                apiKey: "custom-key",
+              },
+            },
+            "custom-anthropic-provider": {
+              name: "Custom Anthropic Provider",
+              npm: "@ai-sdk/anthropic",
+              api: "https://api.custom.com/v1",
+              models: {
+                "deepseek-r1": {
+                  name: "DeepSeek R1",
+                },
+              },
+              options: {
+                apiKey: "custom-key",
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const providers = await list()
+      const provider = providers[ProviderID.make("custom-provider")]
+      expect(provider.models["deepseek-r1"].capabilities.interleaved).toEqual({ field: "reasoning_content" })
+      expect(provider.models["deepseek-details"].capabilities.interleaved).toEqual({ field: "reasoning_details" })
+      expect(provider.models["custom-model"].capabilities.interleaved).toBe(false)
+      expect(
+        providers[ProviderID.make("custom-anthropic-provider")].models["deepseek-r1"].capabilities.interleaved,
+      ).toBe(false)
     },
   })
 })
@@ -1090,45 +1090,6 @@ test("getSmallModel respects config small_model override", async () => {
   })
 })
 
-test("getSmallModel uses configured codex model before codex mini defaults", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Bun.write(
-        path.join(dir, "opencode.json"),
-        JSON.stringify({
-          $schema: "https://opencode.ai/config.json",
-          model: "codex/gpt-5.5",
-          provider: {
-            codex: {
-              name: "Codex",
-              env: ["CODEX_API_KEY"],
-              npm: "@opencode-ai/codex",
-              options: {
-                apiKey: "test-codex-key",
-                baseURL: "https://codex.example.test/v1",
-              },
-              models: {
-                "gpt-5.5": {
-                  name: "GPT 5.5",
-                },
-              },
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const model = await getSmallModel(ProviderID.codex)
-      expect(model).toBeDefined()
-      expect(String(model?.providerID)).toBe("codex")
-      expect(String(model?.id)).toBe("gpt-5.5")
-    },
-  })
-})
-
 test("provider.sort prioritizes preferred models", () => {
   const models = [
     { id: "random-model", name: "Random" },
@@ -1215,39 +1176,6 @@ test("provider with custom npm package", async () => {
       expect(providers[ProviderID.make("local-llm")]).toBeDefined()
       expect(providers[ProviderID.make("local-llm")].models["llama-3"].api.npm).toBe("@ai-sdk/openai-compatible")
       expect(providers[ProviderID.make("local-llm")].options.baseURL).toBe("http://localhost:11434/v1")
-    },
-  })
-})
-
-test("codex inherits openai models when no explicit models are configured", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Bun.write(
-        path.join(dir, "opencode.json"),
-        JSON.stringify({
-          $schema: "https://opencode.ai/config.json",
-          provider: {
-            codex: {
-              name: "Codex",
-              npm: "@ai-sdk/openai",
-              transport: "responses",
-              options: {
-                apiKey: "test-codex-key",
-                baseURL: "https://codex.example.test/v1",
-              },
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const providers = await list()
-      expect(providers[ProviderID.codex]).toBeDefined()
-      expect(providers[ProviderID.codex].models["gpt-5"]).toBeDefined()
-      expect(String(providers[ProviderID.codex].models["gpt-5"].providerID)).toBe("codex")
     },
   })
 })
@@ -2580,8 +2508,11 @@ test("cloudflare-ai-gateway forwards config metadata options", async () => {
 test("plugin config providers persist after instance dispose", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
-      const root = path.join(dir, ".opencode", "plugin")
+      const configDir = path.join(dir, ".opencode")
+      const root = path.join(configDir, "plugin")
       await mkdir(root, { recursive: true })
+      await markPluginDependenciesReady(configDir)
+      await markPluginDependenciesReady(Global.Path.config)
       await Bun.write(
         path.join(root, "demo-provider.ts"),
         [

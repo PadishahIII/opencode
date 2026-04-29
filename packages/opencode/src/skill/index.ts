@@ -1,23 +1,23 @@
 import os from "os"
 import path from "path"
-import { fileURLToPath, pathToFileURL } from "url"
+import { pathToFileURL } from "url"
 import z from "zod"
-import { Effect, Layer, Context } from "effect"
-import { NamedError } from "@opencode-ai/shared/util/error"
+import { Effect, Layer, Context, Schema } from "effect"
+import { zod } from "@/util/effect-zod"
+import { withStatics } from "@/util/schema"
+import { NamedError } from "@opencode-ai/core/util/error"
 import type { Agent } from "@/agent/agent"
 import { Bus } from "@/bus"
-import { InstanceState } from "@/effect"
-import { Flag } from "@/flag/flag"
-import { Global } from "@/global"
+import { InstanceState } from "@/effect/instance-state"
+import { Flag } from "@opencode-ai/core/flag/flag"
+import { Global } from "@opencode-ai/core/global"
 import { Permission } from "@/permission"
-import { AppFileSystem } from "@opencode-ai/shared/filesystem"
-import { Config } from "../config"
-import { ConfigMarkdown } from "../config"
-import { Glob } from "@opencode-ai/shared/util/glob"
-import { Log } from "../util"
+import { AppFileSystem } from "@opencode-ai/core/filesystem"
+import { Config } from "@/config/config"
+import { ConfigMarkdown } from "@/config/markdown"
+import { Glob } from "@opencode-ai/core/util/glob"
+import * as Log from "@opencode-ai/core/util/log"
 import { Discovery } from "./discovery"
-import { ConfigPlugin } from "@/config/plugin"
-import { resolvePluginTarget } from "@/plugin/shared"
 
 const log = Log.create({ service: "skill" })
 const EXTERNAL_DIRS = [".claude", ".agents"]
@@ -25,13 +25,13 @@ const EXTERNAL_SKILL_PATTERN = "skills/**/SKILL.md"
 const OPENCODE_SKILL_PATTERN = "{skill,skills}/**/SKILL.md"
 const SKILL_PATTERN = "**/SKILL.md"
 
-export const Info = z.object({
-  name: z.string(),
-  description: z.string(),
-  location: z.string(),
-  content: z.string(),
-})
-export type Info = z.infer<typeof Info>
+export const Info = Schema.Struct({
+  name: Schema.String,
+  description: Schema.String,
+  location: Schema.String,
+  content: Schema.String,
+}).pipe(withStatics((s) => ({ zod: zod(s) })))
+export type Info = Schema.Schema.Type<typeof Info>
 
 export const InvalidError = NamedError.create(
   "SkillInvalidError",
@@ -83,7 +83,7 @@ const add = Effect.fnUntraced(function* (state: State, match: string, bus: Bus.I
         const message = ConfigMarkdown.FrontmatterError.isInstance(err)
           ? err.data.message
           : `Failed to parse skill ${match}`
-        const { Session } = yield* Effect.promise(() => import("@/session"))
+        const { Session } = yield* Effect.promise(() => import("@/session/session"))
         yield* bus.publish(Session.Event.Error, { error: new NamedError.Unknown({ message }).toObject() })
         log.error("failed to load skill", { skill: match, err })
         return undefined
@@ -93,7 +93,7 @@ const add = Effect.fnUntraced(function* (state: State, match: string, bus: Bus.I
 
   if (!md) return
 
-  const parsed = Info.pick({ name: true, description: true }).safeParse(md.data)
+  const parsed = z.object({ name: z.string(), description: z.string() }).safeParse(md.data)
   if (!parsed.success) return
 
   if (state.skills[parsed.data.name]) {
@@ -190,24 +190,6 @@ const discoverSkills = Effect.fnUntraced(function* (
     for (const dir of pulledDirs) {
       yield* scan(state, dir, SKILL_PATTERN)
     }
-  }
-
-  const pluginOrigins = cfg.plugin_origins ?? []
-  if (pluginOrigins.length) yield* config.waitForDependencies()
-  for (const origin of pluginOrigins) {
-    const spec = ConfigPlugin.pluginSpecifier(origin.spec)
-    const target = yield* Effect.tryPromise({
-      try: () => resolvePluginTarget(spec),
-      catch: (error) => error,
-    }).pipe(
-      Effect.catch((error) => {
-        log.warn("failed to resolve plugin skills", { plugin: spec, error })
-        return Effect.succeed(undefined)
-      }),
-    )
-    const root = target?.startsWith("file://") ? fileURLToPath(target) : target
-    if (!root || !(yield* fsys.isDir(root))) continue
-    yield* scan(state, root, OPENCODE_SKILL_PATTERN, { scope: "plugin package" })
   }
 
   return {

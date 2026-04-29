@@ -3,9 +3,8 @@ import path from "path"
 import fs from "fs/promises"
 import { Effect, Layer } from "effect"
 import { Instance } from "../../src/project/instance"
-import * as CrossSpawnSpawner from "../../src/effect/cross-spawn-spawner"
-import { ToolRegistry } from "../../src/tool"
-import { ProviderID, ModelID } from "../../src/provider/schema"
+import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { ToolRegistry } from "@/tool/registry"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -147,52 +146,6 @@ describe("tool.registry", () => {
         const registry = yield* ToolRegistry.Service
         const ids = yield* registry.ids()
         expect(ids).toContain("cowsay")
-      }),
-    ),
-  )
-
-  it.live("uses edit and write for non-codex gpt models", () =>
-    provideTmpdirInstance(() =>
-      Effect.gen(function* () {
-        const registry = yield* ToolRegistry.Service
-        const tools = yield* registry.tools({
-          providerID: ProviderID.githubCopilot,
-          modelID: ModelID.make("gpt-5.2-codex"),
-          agent: {
-            name: "test",
-            mode: "primary",
-            options: {},
-            permission: [{ permission: "*", pattern: "*", action: "allow" }],
-          },
-        })
-        const ids = tools.map((tool) => tool.id)
-
-        expect(ids).toContain("edit")
-        expect(ids).toContain("write")
-        expect(ids).not.toContain("apply_patch")
-      }),
-    ),
-  )
-
-  it.live("uses apply_patch for codex gpt models", () =>
-    provideTmpdirInstance(() =>
-      Effect.gen(function* () {
-        const registry = yield* ToolRegistry.Service
-        const tools = yield* registry.tools({
-          providerID: ProviderID.codex,
-          modelID: ModelID.make("gpt-5.2-codex"),
-          agent: {
-            name: "test",
-            mode: "primary",
-            options: {},
-            permission: [{ permission: "*", pattern: "*", action: "allow" }],
-          },
-        })
-        const ids = tools.map((tool) => tool.id)
-
-        expect(ids).toContain("apply_patch")
-        expect(ids).not.toContain("edit")
-        expect(ids).not.toContain("write")
       }),
     ),
   )

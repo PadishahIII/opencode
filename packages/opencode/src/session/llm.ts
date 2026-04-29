@@ -1,27 +1,27 @@
-import { Provider } from "@/provider"
-import { Log } from "@/util"
+import { Provider } from "@/provider/provider"
+import * as Log from "@opencode-ai/core/util/log"
 import { Context, Effect, Layer, Record } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool, tool, jsonSchema } from "ai"
 import { mergeDeep, pipe } from "remeda"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
-import { ProviderTransform } from "@/provider"
-import { Config } from "@/config"
+import { ProviderTransform } from "@/provider/transform"
+import { Config } from "@/config/config"
 import { Instance } from "@/project/instance"
 import type { Agent } from "@/agent/agent"
 import type { MessageV2 } from "./message-v2"
 import { Plugin } from "@/plugin"
 import { SystemPrompt } from "./system"
-import { Flag } from "@/flag/flag"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { Permission } from "@/permission"
 import { PermissionID } from "@/permission/schema"
 import { Bus } from "@/bus"
-import { Wildcard } from "@/util"
+import { Wildcard } from "@/util/wildcard"
 import { SessionID } from "@/session/schema"
 import { Auth } from "@/auth"
 import { Installation } from "@/installation"
-import { InstallationVersion } from "@/installation/version"
-import { EffectBridge } from "@/effect"
+import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { EffectBridge } from "@/effect/bridge"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
 
@@ -95,7 +95,6 @@ const live: Layer.Layer<
 
       // TODO: move this to a proper hook
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
-      const usesTopLevelInstructions = isOpenaiOauth || input.model.providerID === "codex"
 
       const system: string[] = []
       system.push(
@@ -141,19 +140,12 @@ const live: Layer.Layer<
         mergeDeep(input.agent.options),
         mergeDeep(variant),
       )
-      if (input.model.providerID === "codex") {
-        options.sessionID = input.sessionID
-        delete options.include
-        delete options.promptCacheKey
-        delete options.reasoningSummary
-        delete options.textVerbosity
-      }
-      if (usesTopLevelInstructions) {
+      if (isOpenaiOauth) {
         options.instructions = system.join("\n")
       }
 
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
-      const messages = usesTopLevelInstructions
+      const messages = isOpenaiOauth
         ? input.messages
         : isWorkflow
           ? input.messages
@@ -202,7 +194,6 @@ const live: Layer.Layer<
       )
 
       const tools = resolveTools(input)
-      const effectiveTools = tools
 
       // LiteLLM and some Anthropic proxies require the tools parameter to be present
       // when message history contains tool calls, even if no tools are being used.
@@ -221,10 +212,10 @@ const live: Layer.Layer<
       // The stub description explicitly tells the model not to call it.
       if (
         (isLiteLLMProxy || input.model.providerID.includes("github-copilot")) &&
-        Object.keys(effectiveTools).length === 0 &&
+        Object.keys(tools).length === 0 &&
         hasToolCalls(input.messages)
       ) {
-        effectiveTools["_noop"] = tool({
+        tools["_noop"] = tool({
           description: "Do not call this tool. It exists only for API compatibility and must never be invoked.",
           inputSchema: jsonSchema({
             type: "object",
@@ -248,7 +239,7 @@ const live: Layer.Layer<
         workflowModel.sessionID = input.sessionID
         workflowModel.systemPrompt = system.join("\n")
         workflowModel.toolExecutor = async (toolName, argsJson, _requestID) => {
-          const t = effectiveTools[toolName]
+          const t = tools[toolName]
           if (!t || !t.execute) {
             return { result: "", error: `Unknown tool: ${toolName}` }
           }
@@ -270,7 +261,7 @@ const live: Layer.Layer<
         }
 
         const ruleset = Permission.merge(input.agent.permission ?? [], input.permission ?? [])
-        workflowModel.sessionPreapprovedTools = Object.keys(effectiveTools).filter((name) => {
+        workflowModel.sessionPreapprovedTools = Object.keys(tools).filter((name) => {
           const match = ruleset.findLast((rule) => Wildcard.match(name, rule.permission))
           return !match || match.action !== "ask"
         })
@@ -347,7 +338,7 @@ const live: Layer.Layer<
         },
         async experimental_repairToolCall(failed) {
           const lower = failed.toolCall.toolName.toLowerCase()
-          if (lower !== failed.toolCall.toolName && effectiveTools[lower]) {
+          if (lower !== failed.toolCall.toolName && tools[lower]) {
             l.info("repairing tool call", {
               tool: failed.toolCall.toolName,
               repaired: lower,
@@ -370,8 +361,8 @@ const live: Layer.Layer<
         topP: params.topP,
         topK: params.topK,
         providerOptions: ProviderTransform.providerOptions(input.model, params.options),
-        activeTools: Object.keys(effectiveTools).filter((x) => x !== "invalid"),
-        tools: effectiveTools,
+        activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
+        tools,
         toolChoice: input.toolChoice,
         maxOutputTokens: params.maxOutputTokens,
         abortSignal: input.abort,
@@ -382,15 +373,8 @@ const live: Layer.Layer<
                 "x-opencode-session": input.sessionID,
                 "x-opencode-request": input.user.id,
                 "x-opencode-client": Flag.OPENCODE_CLIENT,
+                "User-Agent": `opencode/${InstallationVersion}`,
               }
-            : input.model.providerID === "codex"
-              ? {
-                  "x-session-affinity": input.sessionID,
-                  "x-client-request-id": input.sessionID,
-                  session_id: input.sessionID,
-                  "User-Agent": `opencode/${InstallationVersion}`,
-                  version: InstallationVersion,
-                }
             : {
                 "x-session-affinity": input.sessionID,
                 ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
