@@ -87,6 +87,8 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
 
 type BundledSDK = {
   languageModel(modelId: string): LanguageModelV3
+  responses?: (modelId: string) => LanguageModelV3
+  chat?: (modelId: string) => LanguageModelV3
 }
 
 const BUNDLED_PROVIDERS: Record<string, () => Promise<(opts: any) => BundledSDK>> = {
@@ -113,6 +115,7 @@ const BUNDLED_PROVIDERS: Record<string, () => Promise<(opts: any) => BundledSDK>
   "@ai-sdk/alibaba": () => import("@ai-sdk/alibaba").then((m) => m.createAlibaba),
   "gitlab-ai-provider": () => import("gitlab-ai-provider").then((m) => m.createGitLab),
   "@ai-sdk/github-copilot": () => import("./sdk/copilot/copilot-provider").then((m) => m.createOpenaiCompatible),
+  "@opencode-ai/codex": () => import("./sdk/codex").then((m) => m.createCodexProvider),
   "venice-ai-sdk-provider": () => import("venice-ai-sdk-provider").then((m) => m.createVenice),
 }
 
@@ -136,6 +139,33 @@ type CustomDep = {
 
 function useLanguageModel(sdk: any) {
   return sdk.responses === undefined && sdk.chat === undefined
+}
+
+function cloneModelsForProvider(source: Record<string, Model>, providerID: ProviderID, apiUrl?: string) {
+  return Object.fromEntries(
+    Object.entries(source).map(([id, model]) => {
+      const next = structuredClone(model)
+      next.providerID = providerID
+      if (apiUrl) next.api.url = apiUrl
+      if (providerID === ProviderID.codex) next.api.npm = "@opencode-ai/codex"
+      return [id, next]
+    }),
+  )
+}
+
+function selectLanguageModel(input: { sdk: any; modelID: string; provider: Info }) {
+  if (input.provider.transport === "responses") {
+    if (input.sdk.responses) return input.sdk.responses(input.modelID)
+    throw new Error(`Provider ${input.provider.id} requested responses transport but SDK has no responses() method`)
+  }
+
+  if (input.provider.transport === "chat") {
+    if (input.sdk.chat) return input.sdk.chat(input.modelID)
+    if (useLanguageModel(input.sdk)) return input.sdk.languageModel(input.modelID)
+    throw new Error(`Provider ${input.provider.id} requested chat transport but SDK has no chat() method`)
+  }
+
+  return input.sdk.languageModel(input.modelID)
 }
 
 function custom(dep: CustomDep): Record<string, CustomLoader> {
@@ -195,6 +225,11 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
           if (useLanguageModel(sdk)) return sdk.languageModel(modelID)
           return shouldUseCopilotResponsesApi(modelID) ? sdk.responses(modelID) : sdk.chat(modelID)
         },
+        options: {},
+      }),
+    codex: () =>
+      Effect.succeed({
+        autoload: false,
         options: {},
       }),
     azure: Effect.fnUntraced(function* (provider: Info) {
@@ -894,6 +929,7 @@ export const Info = Schema.Struct({
   id: ProviderID,
   name: Schema.String,
   source: Schema.Literals(["env", "config", "custom", "api"]),
+  transport: Schema.optional(Schema.Literals(["sdk", "responses", "chat"])),
   env: Schema.Array(Schema.String),
   key: Schema.optional(Schema.String),
   options: Schema.Record(Schema.String, Schema.Any),
@@ -1124,24 +1160,32 @@ const layer: Layer.Layer<
         // extend database from config
         for (const [providerID, provider] of configProviders) {
           const existing = database[providerID]
+          const inheritedModels =
+            existing?.models ??
+            (providerID === ProviderID.codex
+              ? cloneModelsForProvider(database[ProviderID.openai]?.models ?? {}, ProviderID.codex, provider.api)
+              : {})
           const parsed: Info = {
             id: ProviderID.make(providerID),
             name: provider.name ?? existing?.name ?? providerID,
+            transport: provider.transport ?? existing?.transport,
             env: provider.env ?? existing?.env ?? [],
             options: mergeDeep(existing?.options ?? {}, provider.options ?? {}),
             source: "config",
-            models: existing?.models ?? {},
+            models: inheritedModels,
           }
 
           for (const [modelID, model] of Object.entries(provider.models ?? {})) {
             const existingModel = parsed.models[model.id ?? modelID]
             const apiID = model.id ?? existingModel?.api.id ?? modelID
             const apiNpm =
-              model.provider?.npm ??
-              provider.npm ??
-              existingModel?.api.npm ??
-              modelsDev[providerID]?.npm ??
-              "@ai-sdk/openai-compatible"
+              providerID === ProviderID.codex
+                ? (model.provider?.npm ?? provider.npm ?? "@opencode-ai/codex")
+                : (model.provider?.npm ??
+                  provider.npm ??
+                  existingModel?.api.npm ??
+                  modelsDev[providerID]?.npm ??
+                  "@ai-sdk/openai-compatible")
             const name = iife(() => {
               if (model.name) return model.name
               if (model.id && model.id !== modelID) return modelID
@@ -1287,6 +1331,7 @@ const layer: Layer.Layer<
           const partial: Partial<Info> = { source: "config" }
           if (provider.env) partial.env = provider.env
           if (provider.name) partial.name = provider.name
+          if (provider.transport) partial.transport = provider.transport
           if (provider.options) partial.options = provider.options
           mergeProvider(providerID, partial)
         }
@@ -1565,12 +1610,19 @@ const layer: Layer.Layer<
         const sdk = await resolveSDK(model, s, envs)
 
         try {
-          const language = s.modelLoaders[model.providerID]
-            ? await s.modelLoaders[model.providerID](sdk, model.api.id, {
-                ...provider.options,
-                ...model.options,
+          const mergedOptions = {
+            ...provider.options,
+            ...model.options,
+          }
+          const language = provider.transport
+            ? selectLanguageModel({
+                sdk,
+                modelID: model.api.id,
+                provider,
               })
-            : sdk.languageModel(model.api.id)
+            : s.modelLoaders[model.providerID]
+              ? await s.modelLoaders[model.providerID](sdk, model.api.id, mergedOptions)
+              : sdk.languageModel(model.api.id)
           s.models.set(key, language)
           return language
         } catch (e) {
@@ -1611,6 +1663,13 @@ const layer: Layer.Layer<
       const provider = s.providers[providerID]
       if (!provider) return undefined
 
+      if (providerID === ProviderID.codex && cfg.model) {
+        const parsed = parseModel(cfg.model)
+        if (parsed.providerID === ProviderID.codex && provider.models[parsed.modelID]) {
+          return yield* getModel(parsed.providerID, parsed.modelID)
+        }
+      }
+
       let priority = [
         "claude-haiku-4-5",
         "claude-haiku-4.5",
@@ -1625,6 +1684,9 @@ const layer: Layer.Layer<
       }
       if (providerID.startsWith("github-copilot")) {
         priority = ["gpt-5-mini", "claude-haiku-4.5", ...priority]
+      }
+      if (providerID === ProviderID.codex) {
+        priority = ["gpt-5.4-mini", "gpt-5-mini", "gpt-5.3-codex-spark", "gpt-5.3-codex", "gpt-5.4", ...priority]
       }
       for (const item of priority) {
         if (providerID === ProviderID.amazonBedrock) {

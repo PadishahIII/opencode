@@ -1,6 +1,6 @@
 import os from "os"
 import path from "path"
-import { pathToFileURL } from "url"
+import { fileURLToPath, pathToFileURL } from "url"
 import z from "zod"
 import { Effect, Layer, Context, Schema } from "effect"
 import { zod } from "@/util/effect-zod"
@@ -17,6 +17,8 @@ import { Config } from "@/config/config"
 import { ConfigMarkdown } from "@/config/markdown"
 import { Glob } from "@opencode-ai/core/util/glob"
 import * as Log from "@opencode-ai/core/util/log"
+import { ConfigPlugin } from "@/config/plugin"
+import { resolvePluginTarget } from "@/plugin/shared"
 import { Discovery } from "./discovery"
 
 const log = Log.create({ service: "skill" })
@@ -190,6 +192,24 @@ const discoverSkills = Effect.fnUntraced(function* (
     for (const dir of pulledDirs) {
       yield* scan(state, dir, SKILL_PATTERN)
     }
+  }
+
+  const pluginOrigins = cfg.plugin_origins ?? []
+  if (pluginOrigins.length) yield* config.waitForDependencies()
+  for (const origin of pluginOrigins) {
+    const spec = ConfigPlugin.pluginSpecifier(origin.spec)
+    const target = yield* Effect.tryPromise({
+      try: () => resolvePluginTarget(spec),
+      catch: (error) => error,
+    }).pipe(
+      Effect.catch((error) => {
+        log.warn("failed to resolve plugin skills", { plugin: spec, error })
+        return Effect.succeed(undefined)
+      }),
+    )
+    const root = target?.startsWith("file://") ? fileURLToPath(target) : target
+    if (!root || !(yield* fsys.isDir(root))) continue
+    yield* scan(state, root, OPENCODE_SKILL_PATTERN, { scope: "plugin package" })
   }
 
   return {

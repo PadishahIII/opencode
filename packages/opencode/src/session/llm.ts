@@ -95,6 +95,7 @@ const live: Layer.Layer<
 
       // TODO: move this to a proper hook
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
+      const usesTopLevelInstructions = isOpenaiOauth || input.model.providerID === "codex"
 
       const system: string[] = []
       system.push(
@@ -140,12 +141,19 @@ const live: Layer.Layer<
         mergeDeep(input.agent.options),
         mergeDeep(variant),
       )
-      if (isOpenaiOauth) {
+      if (input.model.providerID === "codex") {
+        options.sessionID = input.sessionID
+        delete options.include
+        delete options.promptCacheKey
+        delete options.reasoningSummary
+        delete options.textVerbosity
+      }
+      if (usesTopLevelInstructions) {
         options.instructions = system.join("\n")
       }
 
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
-      const messages = isOpenaiOauth
+      const messages = usesTopLevelInstructions
         ? input.messages
         : isWorkflow
           ? input.messages
@@ -375,11 +383,18 @@ const live: Layer.Layer<
                 "x-opencode-client": Flag.OPENCODE_CLIENT,
                 "User-Agent": `opencode/${InstallationVersion}`,
               }
-            : {
-                "x-session-affinity": input.sessionID,
-                ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
-                "User-Agent": `opencode/${InstallationVersion}`,
-              }),
+            : input.model.providerID === "codex"
+              ? {
+                  "x-session-affinity": input.sessionID,
+                  "x-client-request-id": input.sessionID,
+                  session_id: input.sessionID,
+                  "User-Agent": `opencode/${InstallationVersion}`,
+                }
+              : {
+                  "x-session-affinity": input.sessionID,
+                  ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
+                  "User-Agent": `opencode/${InstallationVersion}`,
+                }),
           ...input.model.headers,
           ...headers,
         },

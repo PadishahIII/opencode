@@ -17,6 +17,10 @@ import { text } from "node:stream/consumers"
 import { Effect } from "effect"
 
 type PluginAuth = NonNullable<Hooks["auth"]>
+type ProviderNameInfo = {
+  name?: string
+  env?: readonly string[]
+}
 
 const put = (key: string, info: Auth.Info) =>
   AppRuntime.runPromise(
@@ -183,6 +187,73 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, 
   return false
 }
 
+export function providerDisplayName(
+  providerID: string,
+  database: Record<string, ProviderNameInfo>,
+  configuredProviders: Record<string, ProviderNameInfo | undefined>,
+) {
+  return database[providerID]?.name || configuredProviders[providerID]?.name || providerID
+}
+
+export function resolveConfigProviders(input: {
+  existingProviders: Record<string, unknown>
+  configuredProviders: Record<string, ProviderNameInfo | undefined>
+  disabled: Set<string>
+  enabled?: Set<string>
+}): Array<{ id: string; name: string }> {
+  const result: Array<{ id: string; name: string }> = []
+
+  for (const [id, provider] of Object.entries(input.configuredProviders)) {
+    if (!provider) continue
+    if (Object.hasOwn(input.existingProviders, id)) continue
+    if (input.disabled.has(id)) continue
+    if (input.enabled && !input.enabled.has(id)) continue
+    result.push({
+      id,
+      name: provider.name ?? id,
+    })
+  }
+
+  return result
+}
+
+export function resolveSyntheticProviders(input: {
+  existingProviders: Record<string, unknown>
+  configuredProviders: Record<string, ProviderNameInfo | undefined>
+  pluginProviders: Array<{ id: string; name: string }>
+  disabled: Set<string>
+  enabled?: Set<string>
+}): Array<{ id: string; name: string; hint?: string }> {
+  const result: Array<{ id: string; name: string; hint?: string }> = []
+
+  const hasCodex =
+    Object.hasOwn(input.existingProviders, "codex") ||
+    Object.hasOwn(input.configuredProviders, "codex") ||
+    input.pluginProviders.some((item) => item.id === "codex")
+
+  if (!hasCodex && !input.disabled.has("codex") && (!input.enabled || input.enabled.has("codex"))) {
+    result.push({
+      id: "codex",
+      name: "Codex",
+      hint: "Responses API",
+    })
+  }
+
+  return result
+}
+
+export function codexProviderConfig(baseURL: string) {
+  return {
+    name: "Codex",
+    env: ["CODEX_API_KEY"],
+    npm: "@opencode-ai/codex",
+    api: baseURL,
+    options: {
+      baseURL,
+    },
+  }
+}
+
 export function resolvePluginProviders(input: {
   hooks: Hooks[]
   existingProviders: Record<string, unknown>
@@ -229,16 +300,18 @@ export const ProvidersListCommand = cmd({
     const homedir = os.homedir()
     const displayPath = authPath.startsWith(homedir) ? authPath.replace(homedir, "~") : authPath
     prompts.intro(`Credentials ${UI.Style.TEXT_DIM}${displayPath}`)
-    const results = await AppRuntime.runPromise(
+    const [results, config] = await AppRuntime.runPromise(
       Effect.gen(function* () {
         const auth = yield* Auth.Service
-        return Object.entries(yield* auth.all())
+        const cfg = yield* Config.Service
+        return [Object.entries(yield* auth.all()), yield* cfg.getGlobal()] as const
       }),
     )
+    const configuredProviders = config.provider ?? {}
     const database = await ModelsDev.get()
 
     for (const [providerID, result] of results) {
-      const name = database[providerID]?.name || providerID
+      const name = providerDisplayName(providerID, database, configuredProviders)
       prompts.log.info(`${name} ${UI.Style.TEXT_DIM}${result.type}`)
     }
 
@@ -246,11 +319,14 @@ export const ProvidersListCommand = cmd({
 
     const activeEnvVars: Array<{ provider: string; envVar: string }> = []
 
-    for (const [providerID, provider] of Object.entries(database)) {
-      for (const envVar of provider.env) {
+    const providerIDs = new Set([...Object.keys(database), ...Object.keys(configuredProviders)])
+    for (const providerID of providerIDs) {
+      const provider = configuredProviders[providerID] ?? database[providerID]
+      if (!provider) continue
+      for (const envVar of provider.env ?? []) {
         if (process.env[envVar]) {
           activeEnvVars.push({
-            provider: provider.name || providerID,
+            provider: providerDisplayName(providerID, database, configuredProviders),
             envVar,
           })
         }
@@ -327,6 +403,7 @@ export const ProvidersLoginCommand = cmd({
         await ModelsDev.refresh(true).catch(() => {})
 
         const config = await AppRuntime.runPromise(Config.Service.use((cfg) => cfg.get()))
+        const configuredProviders = config.provider ?? {}
 
         const disabled = new Set(config.disabled_providers ?? [])
         const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
@@ -350,18 +427,35 @@ export const ProvidersLoginCommand = cmd({
         const priority: Record<string, number> = {
           opencode: 0,
           openai: 1,
-          "github-copilot": 2,
-          google: 3,
-          anthropic: 4,
-          openrouter: 5,
-          vercel: 6,
+          codex: 2,
+          "github-copilot": 3,
+          google: 4,
+          anthropic: 5,
+          openrouter: 6,
+          vercel: 7,
         }
-        const pluginProviders = resolvePluginProviders({
-          hooks,
+        const configProviders = resolveConfigProviders({
           existingProviders: providers,
+          configuredProviders,
           disabled,
           enabled,
-          providerNames: Object.fromEntries(Object.entries(config.provider ?? {}).map(([id, p]) => [id, p.name])),
+        })
+        const pluginProviders = resolvePluginProviders({
+          hooks,
+          existingProviders: {
+            ...providers,
+            ...configuredProviders,
+          },
+          disabled,
+          enabled,
+          providerNames: Object.fromEntries(Object.entries(configuredProviders).map(([id, p]) => [id, p?.name])),
+        })
+        const syntheticProviders = resolveSyntheticProviders({
+          existingProviders: providers,
+          configuredProviders,
+          pluginProviders,
+          disabled,
+          enabled,
         })
         const options = [
           ...pipe(
@@ -380,12 +474,25 @@ export const ProvidersLoginCommand = cmd({
               }[x.id],
             })),
           ),
+          ...configProviders.map((x) => ({
+            label: x.name,
+            value: x.id,
+          })),
           ...pluginProviders.map((x) => ({
             label: x.name,
             value: x.id,
             hint: "plugin",
           })),
-        ]
+          ...syntheticProviders.map((x) => ({
+            label: x.name,
+            value: x.id,
+            hint: x.hint,
+          })),
+        ].sort((a, b) => {
+          const priorityDiff = (priority[a.value] ?? 99) - (priority[b.value] ?? 99)
+          if (priorityDiff !== 0) return priorityDiff
+          return a.label.localeCompare(b.label)
+        })
 
         let provider: string
         if (args.provider) {
@@ -451,6 +558,38 @@ export const ProvidersLoginCommand = cmd({
 
         if (provider === "opencode") {
           prompts.log.info("Create an api key at https://opencode.ai/auth")
+        }
+
+        if (provider === "codex") {
+          const globalConfig = await AppRuntime.runPromise(Config.Service.use((cfg) => cfg.getGlobal()))
+          const existingBaseURL = globalConfig.provider?.codex?.options?.baseURL
+          const baseURL = await prompts.text({
+            message: "Enter Codex base URL",
+            defaultValue: existingBaseURL,
+            placeholder: existingBaseURL || "https://your-codex-gateway.example/v1",
+            validate: (value) => {
+              if (!value || value.trim().length === 0) return "Required"
+              try {
+                new URL(value)
+                return undefined
+              } catch {
+                return "Must be a valid URL"
+              }
+            },
+          })
+          if (prompts.isCancel(baseURL)) throw new UI.CancelledError()
+          const normalizedBaseURL = baseURL.replace(/\/+$/, "")
+
+          await AppRuntime.runPromise(
+            Config.Service.use((cfg) =>
+              cfg.updateGlobal({
+                provider: {
+                  codex: codexProviderConfig(normalizedBaseURL),
+                },
+              }),
+            ),
+          )
+          prompts.log.success("Configured codex provider in global config")
         }
 
         if (provider === "vercel") {
