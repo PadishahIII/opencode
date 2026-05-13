@@ -2,14 +2,36 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$SCRIPT_DIR/packages/opencode/dist/opencode-darwin-arm64/bin/opencode"
+
+case "$(uname -s)" in
+  Darwin) OS="darwin" ;;
+  Linux) OS="linux" ;;
+  *)
+    echo "error: unsupported operating system: $(uname -s)" >&2
+    exit 1
+    ;;
+esac
+
+case "$(uname -m)" in
+  arm64|aarch64) ARCH="arm64" ;;
+  x86_64|amd64) ARCH="x64" ;;
+  *)
+    echo "error: unsupported architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
+TARGET="opencode-$OS-$ARCH"
+BIN="$SCRIPT_DIR/packages/opencode/dist/$TARGET/bin/opencode"
 
 usage() {
   cat <<'EOF'
 Usage: ./build.sh
 
-Builds the local OpenCode Darwin arm64 binary at:
-  packages/opencode/dist/opencode-darwin-arm64/bin/opencode
+Builds the local OpenCode binary for this platform at:
+EOF
+  cat <<EOF
+  packages/opencode/dist/$TARGET/bin/opencode
 
 Environment:
   BUN_VERSION    Bun version used via bunx. Default: 1.3.13
